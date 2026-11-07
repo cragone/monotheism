@@ -16,6 +16,17 @@ npm-debug.log*
 server/data/
 *.sqlite
 
+# Bare-metal cync-lan checkout + venv (scripts/setup-cync-lan.sh), local
+# mosquitto persistence, and secrets — alternative to the Docker services.
+cync-lan-src/
+mqtt-data/
+.env.cync-lan
+
+# cync-lan's exported device list, cloud access keys, and generated TLS
+# certs — never commit these. docker-compose.yml bind-mounts this same dir.
+cync-lan-config/*
+!cync-lan-config/.gitkeep
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
