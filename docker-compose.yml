@@ -31,6 +31,52 @@ services:
     volumes:
       - charles-ragone-data:/data
 
+  vecna:
+    build:
+      context: ./vecna
+      dockerfile: dockerfile
+    ports:
+      - "8082:80"
+    environment:
+      - PORT=80
+      - DATA_DIR=/data
+      - MQTT_BROKER_URL=tcp://mqtt-broker:1883
+      - MQTT_BASE_TOPIC=cync_lan
+    volumes:
+      - vecna-data:/data
+    depends_on:
+      - mqtt-broker
+
+  # --- Everything below this line is manually configured home-LAN infra,
+  # not app code built or tested by this repo. See VECNA.md before touching
+  # it, and don't expect `docker compose up` alone to make the plug usable.
+
+  # MQTT broker that both cync-lan and vecna connect to.
+  mqtt-broker:
+    image: eclipse-mosquitto:2
+    ports:
+      - "1883:1883"
+    volumes:
+      - mqtt-data:/mosquitto/data
+      - ./vecna/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+
+  # baudneo/cync-lan — masquerades as GE's cloud so the Cync/C-by-GE plug
+  # phones home locally instead of to GE's real cloud. Does nothing useful
+  # until its one-time manual setup (cloud account export + OTP, cert
+  # generation, router DNS override, power-cycling the plug) is done by
+  # hand — see VECNA.md.
+  cync-lan:
+    image: baudneo/cync-lan:latest
+    ports:
+      - "23779:23779"
+      - "23778:23778" # device-export web UI, only needed during setup
+    volumes:
+      - ./vecna/cync-lan-config:/app/export
+    depends_on:
+      - mqtt-broker
+
 volumes:
   lorena-data:
   charles-ragone-data:
+  vecna-data:
+  mqtt-data:

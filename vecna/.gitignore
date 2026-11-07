@@ -1,0 +1,23 @@
+# Logs
+logs
+*.log
+npm-debug.log*
+
+# Frontend build output / deps (NOT server/web/dist, which holds the
+# committed placeholder the Go binary embeds until a real build overwrites
+# it — see server/web/embed.go)
+/node_modules
+/dist
+/dist-ssr
+*.local
+.vite/
+
+# Go runtime data (sqlite file, created at DATA_DIR)
+server/data/
+*.sqlite
+
+# Editor directories and files
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
