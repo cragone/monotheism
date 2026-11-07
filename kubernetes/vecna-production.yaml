@@ -1,0 +1,88 @@
+# NOTE: included for consistency with the other subprojects' deployment
+# manifests, but likely unused in practice — vecna depends on an MQTT
+# broker and the cync-lan bridge being reachable on the same physical LAN
+# as the smart plug (see VECNA.md), which the existing cloud k8s cluster
+# this repo deploys to is not. Apply this only if you're running a
+# Kubernetes node on your home network with that LAN reachability.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: prod-vecna-data
+  namespace: default
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: prod-vecna
+  namespace: default
+spec:
+  # SQLite lives on a single ReadWriteOnce volume, so this must stay at 1 replica.
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: prod-vecna
+  template:
+    metadata:
+      labels:
+        app: prod-vecna
+    spec:
+      imagePullSecrets:
+        - name: acr-pull-secret
+      containers:
+        - name: prod-vecna
+          image: placeholder # replaced by pipeline via kubectl set image
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 80
+          env:
+            - name: PORT
+              value: "80"
+            - name: DATA_DIR
+              value: /data
+            - name: MQTT_BROKER_URL
+              value: tcp://mqtt-broker:1883
+            - name: MQTT_BASE_TOPIC
+              value: cync_lan
+          volumeMounts:
+            - name: data
+              mountPath: /data
+          readinessProbe:
+            httpGet:
+              path: /api/health
+              port: 80
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /api/health
+              port: 80
+            initialDelaySeconds: 15
+            periodSeconds: 20
+            failureThreshold: 3
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: prod-vecna-data
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: prod-vecna-service
+  namespace: default
+spec:
+  selector:
+    app: prod-vecna
+  ports:
+    - protocol: TCP
+      port: 80
+      targetPort: 80
+  type: ClusterIP

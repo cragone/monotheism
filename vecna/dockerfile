@@ -1,0 +1,20 @@
+FROM node:20-alpine AS frontend-build
+WORKDIR /app
+COPY package*.json ./
+RUN npm install
+COPY . .
+RUN npm run build
+
+FROM golang:1.26-alpine AS server-build
+WORKDIR /app
+COPY server/go.mod server/go.sum ./
+RUN go mod download
+COPY server/ .
+COPY --from=frontend-build /app/dist ./web/dist
+RUN CGO_ENABLED=0 GOOS=linux go build -o /vecna-server ./cmd/server
+
+FROM alpine:3.20
+COPY --from=server-build /vecna-server /vecna-server
+
+EXPOSE 80
+ENTRYPOINT ["/vecna-server"]

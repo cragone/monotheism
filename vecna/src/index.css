@@ -1,0 +1,42 @@
+@import "tailwindcss";
+@plugin "daisyui";
+@plugin "daisyui/theme" {
+    name: "vecna-dark";
+    default: true;
+    prefersdark: true;
+    color-scheme: dark;
+
+    --color-base-100: oklch(19% 0.01 280);
+    --color-base-200: oklch(16% 0.01 280);
+    --color-base-300: oklch(24% 0.012 280);
+    --color-base-content: oklch(94% 0.005 280);
+
+    --color-primary: oklch(62% 0.18 300);
+    --color-primary-content: oklch(98% 0.01 300);
+
+    --color-secondary: oklch(60% 0.03 280);
+    --color-secondary-content: oklch(98% 0.005 280);
+
+    --color-accent: oklch(72% 0.15 160);
+    --color-accent-content: oklch(16% 0.02 160);
+
+    --color-neutral: oklch(26% 0.01 280);
+    --color-neutral-content: oklch(94% 0.01 280);
+
+    --color-success: oklch(68% 0.14 150);
+    --color-success-content: oklch(16% 0.02 150);
+
+    --color-warning: oklch(80% 0.12 80);
+    --color-warning-content: oklch(18% 0.02 80);
+
+    --color-error: oklch(68% 0.18 25);
+    --color-error-content: oklch(16% 0.02 25);
+
+    --radius-selector: 0.5rem;
+    --radius-field: 0.5rem;
+    --radius-box: 0.75rem;
+
+    --border: 1px;
+    --depth: 1;
+    --noise: 0;
+}
