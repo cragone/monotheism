@@ -41,6 +41,11 @@ nix develop --command bash -c '
   CGO_ENABLED=0 go build -o /tmp/vecna-server ./cmd/server
 '
 
+# Port 80 needs CAP_NET_BIND_SERVICE; the binary gets a fresh inode on every
+# build above, so the capability has to be re-applied each time. This relies
+# on a NOPASSWD sudoers rule scoped to exactly this command (see VECNA.md).
+sudo -n setcap 'cap_net_bind_service=+ep' /tmp/vecna-server
+
 tmux kill-session -t "$SESSION" 2>/dev/null || true
 tmux new-session -d -s "$SESSION" -c "$REPO_DIR/vecna/server" "/tmp/vecna-server"
 
