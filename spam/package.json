@@ -1,0 +1,13 @@
+{
+  "name": "spam",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "description": "spam.charlesragone.com — a small threads-based social site (Node + built-in SQLite, no dependencies).",
+  "engines": { "node": ">=22.13" },
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js",
+    "test": "node --test"
+  }
+}

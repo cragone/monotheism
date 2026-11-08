@@ -1,0 +1,15 @@
+# spam: one image serving the static UI and the JSON API. Uses Node's built-in SQLite, so there
+# are no npm dependencies and no native build step. Build context is the spam/ directory.
+FROM node:22-alpine
+WORKDIR /app
+ENV NODE_ENV=production
+ENV PORT=8080
+ENV DATA_DIR=/data
+
+COPY package.json server.js ./
+COPY public ./public
+RUN mkdir -p /data && chown node:node /data
+
+USER node
+EXPOSE 8080
+CMD ["node", "--disable-warning=ExperimentalWarning", "server.js"]

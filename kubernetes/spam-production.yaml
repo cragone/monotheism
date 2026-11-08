@@ -1,0 +1,81 @@
+# spam: threads-based social site. One pod serves the UI and the API; data lives in SQLite on a
+# single ReadWriteOnce volume, so keep exactly one replica and replace it with Recreate.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: prod-spam-data
+  namespace: default
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 2Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: prod-spam
+  namespace: default
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: prod-spam
+  template:
+    metadata:
+      labels:
+        app: prod-spam
+    spec:
+      imagePullSecrets:
+        - name: acr-pull-secret
+      securityContext:
+        fsGroup: 1000 # the image runs as the non-root `node` user (uid 1000); let it write the volume
+      containers:
+        - name: prod-spam
+          image: placeholder # replaced by pipeline via kubectl set image
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 8080
+          env:
+            - name: PORT
+              value: "8080"
+            - name: DATA_DIR
+              value: /data
+          volumeMounts:
+            - name: data
+              mountPath: /data
+          readinessProbe:
+            httpGet:
+              path: /api/health
+              port: 8080
+            initialDelaySeconds: 3
+            periodSeconds: 10
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /api/health
+              port: 8080
+            initialDelaySeconds: 10
+            periodSeconds: 20
+            failureThreshold: 3
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: prod-spam-data
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: prod-spam-service
+  namespace: default
+spec:
+  selector:
+    app: prod-spam
+  ports:
+    - protocol: TCP
+      port: 80
+      targetPort: 8080
+  type: ClusterIP
