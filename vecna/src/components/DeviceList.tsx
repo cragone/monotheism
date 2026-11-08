@@ -14,8 +14,8 @@ export default function DeviceList({
     return (
       <div className="alert alert-info">
         <span>
-          No devices yet — check that cync-lan has discovered the plug and
-          published it over MQTT. See VECNA.md for the bridge setup steps.
+          No devices yet — check that SHELLY_HOST points at the plug and
+          it's reachable on the LAN. See VECNA.md for setup steps.
         </span>
       </div>
     );

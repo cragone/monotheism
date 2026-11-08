@@ -47,8 +47,8 @@ func setup(t *testing.T) testFixture {
 		t.Fatalf("db.Open: %v", err)
 	}
 
-	dimmable := models.Device{UniqueID: "plug-dimmable", Name: "Dimmable", StateTopic: "s1", CommandTopic: "c1", SupportsBrightness: true}
-	onOff := models.Device{UniqueID: "plug-onoff", Name: "OnOff", StateTopic: "s2", CommandTopic: "c2", SupportsBrightness: false}
+	dimmable := models.Device{UniqueID: "plug-dimmable", Name: "Dimmable", Host: "192.168.1.26", SupportsBrightness: true}
+	onOff := models.Device{UniqueID: "plug-onoff", Name: "OnOff", Host: "192.168.1.27", SupportsBrightness: false}
 	seed(t, gormDB, &dimmable)
 	seed(t, gormDB, &onOff)
 

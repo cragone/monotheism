@@ -10,8 +10,8 @@ import (
 	"github.com/cragone/lorena-teaches-brazilian/vecna/server/internal/models"
 )
 
-// DevicePublisher is the subset of mqtt.Publisher the handlers need,
-// defined here so tests can supply a mock instead of a real MQTT client.
+// DevicePublisher is the subset of shelly.Client the handlers need, defined
+// here so tests can supply a mock instead of a real Shelly client.
 type DevicePublisher interface {
 	SetPower(d models.Device, on bool) error
 	SetBrightness(d models.Device, level int) error

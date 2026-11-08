@@ -6,10 +6,8 @@ type Config struct {
 	Port    string
 	DataDir string
 
-	MQTTBrokerURL string
-	MQTTUsername  string
-	MQTTPassword  string
-	MQTTBaseTopic string
+	ShellyHost string
+	ShellyName string
 }
 
 func Load() Config {
@@ -17,10 +15,8 @@ func Load() Config {
 		Port:    getenv("PORT", "80"),
 		DataDir: getenv("DATA_DIR", "./data"),
 
-		MQTTBrokerURL: getenv("MQTT_BROKER_URL", "tcp://localhost:1883"),
-		MQTTUsername:  getenv("MQTT_USERNAME", ""),
-		MQTTPassword:  getenv("MQTT_PASSWORD", ""),
-		MQTTBaseTopic: getenv("MQTT_BASE_TOPIC", "cync_lan"),
+		ShellyHost: getenv("SHELLY_HOST", ""),
+		ShellyName: getenv("SHELLY_NAME", ""),
 	}
 }
 
