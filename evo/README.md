@@ -66,10 +66,17 @@ the cluster, optionally guarded by the `INTERNAL_TOKEN` secret), tells your brow
 browser reconnects to `/tribe/ws`. All tribes share one persistent world.
 
 It plays like a small Age of Empires: drag to select your people, right-click to gather, hunt, build,
-attack or move, build huts (population), farms, a barracks (warriors, archers) and towers, and age up
-through the Gathering, Hunter and Chief ages. Lose your great hut and your tribe falls, but you can
-begin again with the same genes. You only see what your own people can see: the rest of the map is shaded, and resources you have
-already found stay on the map (shaded) until you see that they are gone.
+attack or move, build huts (population), farms, a barracks (warriors, archers) and towers, and research
+weapon technologies (spear and sword for warriors, bow and longbow for archers) that you then choose
+between when you train a warrior or archer — once trained, a unit keeps whatever it was equipped with.
+Lose your great hut and your tribe falls, but you can begin again with the same genes (and have to
+research your weapons again). You only see what your own people can see: the rest of the map is shaded,
+and resources you have already found stay on the map (shaded) until you see that they are gone.
+
+The world is never empty: a handful of NPC tribes, with their own random genes, always live alongside
+real players, gathering, building, researching and occasionally raiding whichever nearby tribe looks
+weakest. How many there are scales with how many real tribes are playing (3 with nobody around, more as
+players join, up to a cap), so there's always something going on even if you're the only person there.
 
 Your animal's genes become tribe bonuses:
 

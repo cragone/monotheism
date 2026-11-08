@@ -1,8 +1,11 @@
 //! The tribal stage: what a land species becomes once it is strong enough. Your animal's genes
 //! carry over as tribe bonuses, and tribes share one persistent world where they gather, build,
-//! age up and fight, in the spirit of Spore's tribal stage and Age of Empires. This is a pure
-//! simulation: the tribe server owns one `Tribes`, the browser only sends commands and draws.
+//! research weapons and fight, in the spirit of Spore's tribal stage and Age of Empires. This is a
+//! pure simulation: the tribe server owns one `Tribes`, the browser only sends commands and draws.
+//! NPC-controlled tribes live in the same world and are driven by `npc_tribe.rs` instead of a
+//! websocket, through this same `command()` entry point.
 use crate::model::{Diet, Epic, Traits};
+use crate::npc_tribe::NpcBrain;
 use crate::util::*;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -15,7 +18,7 @@ pub const BUILD_VISION: f64 = 520.0;
 const CARRY: f64 = 10.0;
 pub const MAX_POP: usize = 90;
 pub const MAX_QUEUE: usize = 5;
-const BUILD_RANGE: f64 = 900.0;
+pub(crate) const BUILD_RANGE: f64 = 900.0;
 
 /// everything a land species hands over when it evolves into a tribe
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -27,6 +30,39 @@ pub struct TribeCarry {
     pub unlocks: Vec<Epic>,
     pub friends: i32,
     pub species: i32,
+}
+
+const NPC_NAMES: [&str; 10] = ["Ashfang", "Stonewood", "Reedmarsh", "Cinderhollow", "Thornvale", "Mossbriar", "Duskhollow", "Graywater", "Emberfen", "Willowfall"];
+
+fn npc_name(id: u32) -> String {
+    format!("{} Clan", NPC_NAMES[(id as usize) % NPC_NAMES.len()])
+}
+
+/// golden-ratio hue stepping spreads NPC colors out; muted so they read as "not a player" at a glance
+fn npc_color(id: u32) -> u32 {
+    hsl((id as f64 * 0.618_034) % 1.0, 0.35, 0.45)
+}
+
+impl TribeCarry {
+    /// a tribe with no animal behind it: random genes so each NPC looks and fights differently
+    pub fn random(id: u32) -> TribeCarry {
+        let traits = Traits {
+            diet: [Diet::Herb, Diet::Omni, Diet::Carn][rand_int(3)],
+            speed: rand_int(5) as i32,
+            claws: rand_int(4) as i32,
+            tail: rand_int(4) as i32,
+            tough: rand_int(4) as i32,
+            mitosis: rand_int(5) as i32,
+            venom: rand_int(4) as i32,
+            shock: rand_int(4) as i32,
+            spikes: rand_int(4) as i32,
+            charm: rand_int(5) as i32,
+            alpha: rand_int(4) as i32,
+            pounce: rand_int(4) as i32,
+            ..Default::default()
+        };
+        TribeCarry { name: npc_name(id), color: npc_color(id), dna: rand(300.0, 3000.0), traits, unlocks: Vec::new(), friends: rand_int(3) as i32, species: id as i32 }
+    }
 }
 
 /// what the animal looked like, so its people can look like it too: diet decides the ears and
@@ -147,6 +183,40 @@ pub enum RK {
     Meat,
 }
 
+/// weapon research: a small tree, two tiers each for warriors and archers
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
+pub enum Tech {
+    Spear,
+    Sword,
+    Bow,
+    Longbow,
+}
+pub const TECH_LIST: [Tech; 4] = [Tech::Spear, Tech::Sword, Tech::Bow, Tech::Longbow];
+
+pub struct TechDef {
+    pub key: &'static str,
+    pub unit: UK,
+    pub requires: Option<Tech>,
+    /// food, wood, stone
+    pub cost: [f64; 3],
+    pub time: f64,
+    pub dmg_mult: f64,
+    pub range_add: f64,
+}
+impl Tech {
+    pub fn def(self) -> TechDef {
+        match self {
+            Tech::Spear => TechDef { key: "spear", unit: UK::Warrior, requires: None, cost: [150.0, 100.0, 0.0], time: 40.0, dmg_mult: 1.4, range_add: 6.0 },
+            Tech::Sword => TechDef { key: "sword", unit: UK::Warrior, requires: Some(Tech::Spear), cost: [250.0, 150.0, 100.0], time: 70.0, dmg_mult: 1.9, range_add: 6.0 },
+            Tech::Bow => TechDef { key: "bow", unit: UK::Archer, requires: None, cost: [150.0, 150.0, 0.0], time: 40.0, dmg_mult: 1.35, range_add: 40.0 },
+            Tech::Longbow => TechDef { key: "longbow", unit: UK::Archer, requires: Some(Tech::Bow), cost: [250.0, 200.0, 50.0], time: 70.0, dmg_mult: 1.7, range_add: 90.0 },
+        }
+    }
+    pub fn from_name(s: &str) -> Option<Tech> {
+        TECH_LIST.into_iter().find(|t| t.def().key == s)
+    }
+}
+
 pub struct US {
     pub hp: f64,
     pub speed: f64,
@@ -183,17 +253,12 @@ impl UK {
             _ => None,
         }
     }
-    /// the age needed to train this unit
-    pub fn age(self) -> u8 {
-        if self == UK::Archer { 2 } else { 1 }
-    }
 }
 pub struct BS {
     pub hp: f64,
     pub r: f64,
     pub cost: [f64; 3],
     pub time: f64,
-    pub age: u8,
 }
 impl BK {
     pub fn code(self) -> f64 {
@@ -204,11 +269,11 @@ impl BK {
     }
     pub fn stats(self) -> BS {
         match self {
-            BK::Center => BS { hp: 900.0, r: 56.0, cost: [0.0; 3], time: 1.0, age: 1 },
-            BK::Hut => BS { hp: 200.0, r: 28.0, cost: [0.0, 30.0, 0.0], time: 20.0, age: 1 },
-            BK::Farm => BS { hp: 120.0, r: 34.0, cost: [0.0, 40.0, 0.0], time: 18.0, age: 1 },
-            BK::Barracks => BS { hp: 420.0, r: 40.0, cost: [0.0, 80.0, 20.0], time: 35.0, age: 1 },
-            BK::Tower => BS { hp: 360.0, r: 26.0, cost: [0.0, 50.0, 50.0], time: 30.0, age: 2 },
+            BK::Center => BS { hp: 900.0, r: 56.0, cost: [0.0; 3], time: 1.0 },
+            BK::Hut => BS { hp: 200.0, r: 28.0, cost: [0.0, 30.0, 0.0], time: 20.0 },
+            BK::Farm => BS { hp: 120.0, r: 34.0, cost: [0.0, 40.0, 0.0], time: 18.0 },
+            BK::Barracks => BS { hp: 420.0, r: 40.0, cost: [0.0, 80.0, 20.0], time: 35.0 },
+            BK::Tower => BS { hp: 360.0, r: 26.0, cost: [0.0, 50.0, 50.0], time: 30.0 },
         }
     }
     pub fn from_name(s: &str) -> Option<BK> {
@@ -253,6 +318,7 @@ pub struct Unit {
     pub hurt_t: f64,
     pub act: u8,
     pub dead: bool,
+    pub weapon: Option<Tech>,
 }
 #[derive(Clone, Debug)]
 pub struct Building {
@@ -264,7 +330,8 @@ pub struct Building {
     pub hp: f64,
     pub max: f64,
     pub built: f64,
-    pub queue: Vec<(UK, f64)>,
+    /// (kind, remaining train seconds, equipment chosen at train time)
+    pub queue: Vec<(UK, f64, Option<Tech>)>,
     pub rally: Option<(f64, f64)>,
     pub cd: f64,
     pub hurt_t: f64,
@@ -284,17 +351,16 @@ pub struct Tribe {
     pub name: String,
     pub color: u32,
     pub res: [f64; 3],
-    pub age: u8,
+    /// true for an AI-driven tribe, driven by `npc_tribe.rs` instead of a websocket
+    pub npc: bool,
+    pub researched: Vec<Tech>,
+    /// (tech being researched, remaining seconds, total seconds)
+    pub research: Option<(Tech, f64, f64)>,
     pub carry: TribeCarry,
     pub mods: Mods,
     pub score: f64,
     pub alive: bool,
     pub spawn: (f64, f64),
-}
-
-/// age-up costs: (food, wood, stone)
-pub fn age_cost(to: u8) -> [f64; 3] {
-    if to == 2 { [200.0, 100.0, 0.0] } else { [400.0, 300.0, 200.0] }
 }
 
 pub struct Tribes {
@@ -311,6 +377,10 @@ pub struct Tribes {
     regrow_t: [f64; 4],
     /// the rich spots of the map: new resources prefer to appear here, so tribes fight over them
     pub zones: Vec<Zone>,
+    /// NPC tribe ids are allocated from here, well clear of real connection ids
+    pub(crate) next_npc_id: u32,
+    pub(crate) npc_brains: BTreeMap<u32, NpcBrain>,
+    pub(crate) npc_next_pop_check: f64,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -337,12 +407,12 @@ pub struct TMe {
     pub res: [f64; 3],
     pub pop: u32,
     pub cap: u32,
-    pub age: u8,
+    pub researched: Vec<Tech>,
+    pub research: Option<(Tech, f64, f64)>,
     pub score: i64,
     pub alive: bool,
     pub cx: f64,
     pub cy: f64,
-    pub next_age: [f64; 3],
 }
 #[derive(Serialize, Deserialize)]
 pub struct TSnap {
@@ -372,13 +442,28 @@ pub fn wrap(v: f64) -> f64 {
     ((v % MAP) + MAP) % MAP
 }
 /// distance across the seam when that is shorter
-fn dist(ax: f64, ay: f64, bx: f64, by: f64) -> f64 {
+pub(crate) fn dist(ax: f64, ay: f64, bx: f64, by: f64) -> f64 {
     wd(ax - bx).hypot(wd(ay - by))
 }
 
 impl Tribes {
     pub fn new() -> Tribes {
-        let mut w = Tribes { units: Vec::new(), buildings: Vec::new(), nodes: Vec::new(), tribes: BTreeMap::new(), t: 0.0, next_id: 1, uidx: HashMap::new(), bidx: HashMap::new(), nidx: HashMap::new(), regrow_t: [0.0; 4], zones: Vec::new() };
+        let mut w = Tribes {
+            units: Vec::new(),
+            buildings: Vec::new(),
+            nodes: Vec::new(),
+            tribes: BTreeMap::new(),
+            t: 0.0,
+            next_id: 1,
+            uidx: HashMap::new(),
+            bidx: HashMap::new(),
+            nidx: HashMap::new(),
+            regrow_t: [0.0; 4],
+            zones: Vec::new(),
+            next_npc_id: crate::npc_tribe::NPC_ID_BASE,
+            npc_brains: BTreeMap::new(),
+            npc_next_pop_check: 0.0,
+        };
         w.generate();
         w.reindex();
         w
@@ -437,15 +522,14 @@ impl Tribes {
     fn add_deer(&mut self, x: f64, y: f64) {
         let id = self.nid();
         let s = UK::Deer.stats();
-        self.units.push(Unit { id, owner: 0, kind: UK::Deer, x: wrap(x), y: wrap(y), hp: s.hp, max: s.hp, task: Task::Idle, cd: 0.0, res: 0, carry: 0.0, ang: rand(0.0, TAU), poison: 0.0, poison_t: 0.0, moving: false, flee_t: 0.0, hurt_t: 0.0, act: 0, dead: false });
+        self.units.push(Unit { id, owner: 0, kind: UK::Deer, x: wrap(x), y: wrap(y), hp: s.hp, max: s.hp, task: Task::Idle, cd: 0.0, res: 0, carry: 0.0, ang: rand(0.0, TAU), poison: 0.0, poison_t: 0.0, moving: false, flee_t: 0.0, hurt_t: 0.0, act: 0, dead: false, weapon: None });
     }
 
-    fn spawn_unit(&mut self, owner: u32, kind: UK, x: f64, y: f64) -> u32 {
+    fn spawn_unit(&mut self, owner: u32, kind: UK, weapon: Option<Tech>, x: f64, y: f64) -> u32 {
         let id = self.nid();
         let s = kind.stats();
-        let (hp_mult, _) = self.mult(owner);
-        let max = s.hp * hp_mult;
-        self.units.push(Unit { id, owner, kind, x: wrap(x), y: wrap(y), hp: max, max, task: Task::Idle, cd: 0.0, res: 0, carry: 0.0, ang: rand(0.0, TAU), poison: 0.0, poison_t: 0.0, moving: false, flee_t: 0.0, hurt_t: 0.0, act: 0, dead: false });
+        let max = s.hp * self.hp_mult(owner);
+        self.units.push(Unit { id, owner, kind, x: wrap(x), y: wrap(y), hp: max, max, task: Task::Idle, cd: 0.0, res: 0, carry: 0.0, ang: rand(0.0, TAU), poison: 0.0, poison_t: 0.0, moving: false, flee_t: 0.0, hurt_t: 0.0, act: 0, dead: false, weapon });
         self.uidx.insert(id, self.units.len() - 1);
         id
     }
@@ -456,12 +540,8 @@ impl Tribes {
         self.nidx = self.nodes.iter().enumerate().map(|(i, n)| (n.id, i)).collect();
     }
 
-    /// (unit hp multiplier, age multiplier) for an owner
-    fn mult(&self, owner: u32) -> (f64, f64) {
-        match self.tribes.get(&owner) {
-            Some(t) => (t.mods.unit_hp * (1.0 + 0.08 * (t.age as f64 - 1.0)), 1.0 + 0.08 * (t.age as f64 - 1.0)),
-            None => (1.0, 1.0),
-        }
+    fn hp_mult(&self, owner: u32) -> f64 {
+        self.tribes.get(&owner).map_or(1.0, |t| t.mods.unit_hp)
     }
     fn mods(&self, owner: u32) -> Mods {
         self.tribes.get(&owner).map_or_else(Mods::default, |t| t.mods.clone())
@@ -469,9 +549,13 @@ impl Tribes {
 
     // -- tribes -----------------------------------------------------------------
     pub fn add_tribe(&mut self, id: u32, carry: TribeCarry) {
+        self.add_tribe_internal(id, carry, false);
+    }
+
+    pub(crate) fn add_tribe_internal(&mut self, id: u32, carry: TribeCarry, npc: bool) {
         let mods = Mods::from_carry(&carry);
         let spawn = self.find_spawn();
-        self.tribes.insert(id, Tribe { id, name: carry.name.chars().take(16).collect(), color: carry.color, res: [0.0; 3], age: 1, carry, mods, score: 0.0, alive: true, spawn });
+        self.tribes.insert(id, Tribe { id, name: carry.name.chars().take(16).collect(), color: carry.color, res: [0.0; 3], npc, researched: Vec::new(), research: None, carry, mods, score: 0.0, alive: true, spawn });
         self.found(id);
     }
 
@@ -481,7 +565,8 @@ impl Tribes {
         self.nodes.retain(|n| dist(n.x, n.y, spawn.0, spawn.1) > 150.0);
         let Some(t) = self.tribes.get_mut(&id) else { return };
         t.alive = true;
-        t.age = 1;
+        t.researched.clear();
+        t.research = None;
         t.spawn = spawn;
         let bonus = t.mods.start_bonus;
         t.res = [200.0 + bonus, 200.0 + bonus, 100.0 + bonus];
@@ -492,11 +577,11 @@ impl Tribes {
         self.reindex();
         for k in 0..villagers {
             let a = k as f64 * TAU / villagers as f64;
-            self.spawn_unit(id, UK::Villager, spawn.0 + a.cos() * 90.0, spawn.1 + a.sin() * 90.0);
+            self.spawn_unit(id, UK::Villager, None, spawn.0 + a.cos() * 90.0, spawn.1 + a.sin() * 90.0);
         }
         for k in 0..beasts {
             let a = k as f64 * TAU / beasts.max(1) as f64 + 0.5;
-            self.spawn_unit(id, UK::Beast, spawn.0 + a.cos() * 130.0, spawn.1 + a.sin() * 130.0);
+            self.spawn_unit(id, UK::Beast, None, spawn.0 + a.cos() * 130.0, spawn.1 + a.sin() * 130.0);
         }
         self.reindex();
     }
@@ -513,6 +598,7 @@ impl Tribes {
 
     pub fn remove_tribe(&mut self, id: u32) {
         self.tribes.remove(&id);
+        self.npc_brains.remove(&id);
         self.units.retain(|u| u.owner != id);
         self.buildings.retain(|b| b.owner != id);
         self.reindex();
@@ -606,6 +692,7 @@ impl Tribes {
             "train" => {
                 let Some(&bi) = m["b"].as_u64().and_then(|b| self.bidx.get(&(b as u32))) else { return };
                 let Some(kind) = m["u"].as_str().and_then(UK::from_name) else { return };
+                let weapon = m["weapon"].as_str().and_then(Tech::from_name);
                 let b = &self.buildings[bi];
                 let allowed = match b.kind {
                     BK::Center => kind == UK::Villager,
@@ -613,7 +700,12 @@ impl Tribes {
                     _ => false,
                 };
                 let t = &self.tribes[&owner];
-                if b.owner != owner || b.built < 1.0 || !allowed || b.queue.len() >= MAX_QUEUE || t.age < kind.age() {
+                if let Some(w) = weapon {
+                    if w.def().unit != kind || !t.researched.contains(&w) {
+                        return;
+                    }
+                }
+                if b.owner != owner || b.built < 1.0 || !allowed || b.queue.len() >= MAX_QUEUE {
                     return;
                 }
                 if self.pop(owner) >= self.cap(owner) {
@@ -628,7 +720,7 @@ impl Tribes {
                     t.res[k] -= cost[k];
                 }
                 let time = kind.stats().time * t.mods.train;
-                self.buildings[bi].queue.push((kind, time));
+                self.buildings[bi].queue.push((kind, time, weapon));
             }
             "rally" => {
                 if let Some(&bi) = m["b"].as_u64().and_then(|b| self.bidx.get(&(b as u32))) {
@@ -637,21 +729,24 @@ impl Tribes {
                     }
                 }
             }
-            "age" => {
+            "research" => {
+                let Some(tech) = m["tech"].as_str().and_then(Tech::from_name) else { return };
                 let t = &self.tribes[&owner];
-                if t.age >= 3 {
+                if t.research.is_some() || t.researched.contains(&tech) {
                     return;
                 }
-                let cost = age_cost(t.age + 1);
+                let def = tech.def();
+                if def.requires.is_some_and(|r| !t.researched.contains(&r)) {
+                    return;
+                }
+                if (0..3).any(|k| t.res[k] < def.cost[k]) {
+                    return;
+                }
                 let t = self.tribes.get_mut(&owner).unwrap();
-                if (0..3).any(|k| t.res[k] < cost[k]) {
-                    return;
-                }
                 for k in 0..3 {
-                    t.res[k] -= cost[k];
+                    t.res[k] -= def.cost[k];
                 }
-                t.age += 1;
-                t.score += 25.0;
+                t.research = Some((tech, def.time, def.time));
             }
             _ => {}
         }
@@ -662,7 +757,7 @@ impl Tribes {
         let (x, y) = (wrap(m["x"].as_f64().unwrap_or(0.0)), wrap(m["y"].as_f64().unwrap_or(0.0)));
         let bs = kind.stats();
         let t = &self.tribes[&owner];
-        if t.age < bs.age || (0..3).any(|k| t.res[k] < bs.cost[k]) {
+        if (0..3).any(|k| t.res[k] < bs.cost[k]) {
             return;
         }
         // near the camp, and not on top of anything
@@ -706,6 +801,22 @@ impl Tribes {
         }
         self.cleanup();
         self.regrow(dt);
+        self.step_research(dt);
+    }
+
+    fn step_research(&mut self, dt: f64) {
+        for t in self.tribes.values_mut() {
+            if let Some((tech, remaining, total)) = t.research {
+                let left = remaining - dt;
+                if left <= 0.0 {
+                    t.researched.push(tech);
+                    t.research = None;
+                    t.score += 15.0;
+                } else {
+                    t.research = Some((tech, left, total));
+                }
+            }
+        }
     }
 
     fn cleanup(&mut self) {
@@ -869,16 +980,17 @@ impl Tribes {
             self.units[i].task = Task::Idle;
             return;
         };
-        let (kind, owner, x, y) = {
+        let (kind, owner, x, y, weapon) = {
             let u = &self.units[i];
-            (u.kind, u.owner, u.x, u.y)
+            (u.kind, u.owner, u.x, u.y, u.weapon)
         };
         if self.target_owner(tid) == owner {
             self.units[i].task = Task::Idle;
             return;
         }
         let s = kind.stats();
-        let range = s.range + tr;
+        let (wdmg, wrange) = weapon.map(|t| { let d = t.def(); (d.dmg_mult, d.range_add) }).unwrap_or((1.0, 0.0));
+        let range = s.range + wrange + tr;
         let d = dist(x, y, tx, ty);
         if d > 900.0 && owner != 0 {
             self.units[i].task = Task::Idle; // lost it
@@ -895,8 +1007,7 @@ impl Tribes {
         }
         self.units[i].cd = s.cd;
         let mods = self.mods(owner);
-        let (_, age) = self.mult(owner);
-        let mut dmg = s.dmg * age;
+        let mut dmg = s.dmg * wdmg;
         match kind {
             UK::Warrior | UK::Beast => dmg *= mods.melee * if is_unit { 1.0 } else { mods.siege },
             UK::Archer => dmg *= mods.ranged,
@@ -1128,7 +1239,7 @@ impl Tribes {
             }
         }
         // production
-        if let Some(&(ukind, remaining)) = self.buildings[i].queue.first() {
+        if let Some(&(ukind, remaining, weapon)) = self.buildings[i].queue.first() {
             let alive_pop = self.units.iter().filter(|u| u.owner == owner && !u.dead).count();
             if alive_pop >= self.cap(owner) {
                 return; // no room for a new member
@@ -1140,7 +1251,7 @@ impl Tribes {
                 self.buildings[i].queue.remove(0);
                 let r = kind.stats().r;
                 let a = rand(0.0, TAU);
-                let id = self.spawn_unit(owner, ukind, x + a.cos() * (r + 18.0), y + a.sin() * (r + 18.0));
+                let id = self.spawn_unit(owner, ukind, weapon, x + a.cos() * (r + 18.0), y + a.sin() * (r + 18.0));
                 if let Some(t) = self.tribes.get_mut(&owner) {
                     t.score += 1.0;
                 }
@@ -1185,7 +1296,7 @@ impl Tribes {
             out.push(TSnap {
                 t: "tsnap".into(),
                 to: t.id,
-                me: TMe { id: t.id, name: t.name.clone(), color: t.color, res: [t.res[0].floor(), t.res[1].floor(), t.res[2].floor()], pop: self.pop(t.id) as u32, cap: self.cap(t.id) as u32, age: t.age, score: t.score as i64, alive: t.alive, cx, cy, next_age: if t.age < 3 { age_cost(t.age + 1) } else { [0.0; 3] } },
+                me: TMe { id: t.id, name: t.name.clone(), color: t.color, res: [t.res[0].floor(), t.res[1].floor(), t.res[2].floor()], pop: self.pop(t.id) as u32, cap: self.cap(t.id) as u32, researched: t.researched.clone(), research: t.research, score: t.score as i64, alive: t.alive, cx, cy },
                 units: units.collect(),
                 buildings: buildings.collect(),
                 nodes,

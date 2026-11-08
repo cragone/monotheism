@@ -101,10 +101,12 @@ impl App {
             let mut out: Vec<(u32, String)> = Vec::new();
             {
                 let mut world = self.world.lock().unwrap();
+                world.manage_npc_population(); // keeps a few NPC tribes around even with nobody connected
                 if world.tribes.is_empty() {
                     continue; // the land waits for the next tribe
                 }
                 world.step(dt);
+                world.step_npcs(dt);
                 if n % SNAP_EVERY == 0 {
                     snaps = snaps.wrapping_add(1);
                     for s in world.snapshots(snaps % NODES_EVERY == 1) {
