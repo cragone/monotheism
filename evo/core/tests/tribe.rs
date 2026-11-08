@@ -95,10 +95,79 @@ fn building_far_from_camp_or_without_resources_is_refused() {
     // the far side of the world from the camp
     w.command(1, &json!({ "t": "build", "ids": ids, "b": "hut", "x": cx + MAP / 2.0, "y": cy + MAP / 2.0 }));
     assert!(!w.buildings.iter().any(|b| b.kind == BK::Hut));
-    w.command(1, &json!({ "t": "age" })); // 200 food, 100 wood: affordable
-    assert_eq!(w.tribes[&1].age, 2);
-    w.command(1, &json!({ "t": "age" })); // the next age is too expensive right now
-    assert_eq!(w.tribes[&1].age, 2);
+}
+
+#[test]
+fn researching_a_tech_costs_resources_and_completes_after_its_time() {
+    let mut w = Tribes::new();
+    w.add_tribe(1, carry("a", Traits::default())); // 200 food, 100 wood: spear is affordable
+    let before = w.tribes[&1].res;
+    w.command(1, &json!({ "t": "research", "tech": "spear" }));
+    let after = w.tribes[&1].res;
+    assert!(after[0] < before[0] && after[1] < before[1], "spear costs food and wood");
+    assert!(w.tribes[&1].research.is_some());
+    run(&mut w, Tech::Spear.def().time + 1.0);
+    assert!(w.tribes[&1].researched.contains(&Tech::Spear));
+    assert!(w.tribes[&1].research.is_none());
+}
+
+#[test]
+fn research_requires_prereqs_and_only_one_at_a_time() {
+    let mut w = Tribes::new();
+    w.add_tribe(1, carry("a", Traits::default()));
+    // sword needs spear first
+    w.command(1, &json!({ "t": "research", "tech": "sword" }));
+    assert!(w.tribes[&1].research.is_none(), "sword refused without spear");
+    w.command(1, &json!({ "t": "research", "tech": "spear" }));
+    assert!(w.tribes[&1].research.is_some());
+    // can't start a second research while one is already in flight
+    w.command(1, &json!({ "t": "research", "tech": "bow" }));
+    let (tech, ..) = w.tribes[&1].research.unwrap();
+    assert_eq!(tech, Tech::Spear);
+}
+
+#[test]
+fn training_rejects_an_unresearched_weapon() {
+    let mut w = Tribes::new();
+    w.add_tribe(1, carry("a", Traits::default()));
+    let (_, cx, cy) = center(&w, 1);
+    let ids = villagers(&w, 1);
+    for k in 0..40 {
+        let a = k as f64 * 0.5;
+        w.command(1, &json!({ "t": "build", "ids": ids.clone(), "b": "barracks", "x": cx + a.cos() * 160.0, "y": cy + a.sin() * 160.0 }));
+        if w.buildings.iter().any(|b| b.kind == BK::Barracks) {
+            break;
+        }
+    }
+    let bid = w.buildings.iter().find(|b| b.kind == BK::Barracks).unwrap().id;
+    run(&mut w, 60.0); // let the barracks finish building
+    w.command(1, &json!({ "t": "train", "b": bid, "u": "warrior", "weapon": "spear" }));
+    let queued = w.buildings.iter().find(|b| b.id == bid).unwrap().queue.len();
+    assert_eq!(queued, 0, "training with an unresearched weapon is refused");
+}
+
+#[test]
+fn equipped_weapon_changes_combat_outcome() {
+    let mut w = Tribes::new();
+    w.add_tribe(1, carry("a", Traits::default()));
+    w.add_tribe(2, carry("b", Traits::default()));
+    w.command(1, &json!({ "t": "research", "tech": "spear" }));
+    run(&mut w, Tech::Spear.def().time + 1.0);
+    assert!(w.tribes[&1].researched.contains(&Tech::Spear));
+    let armed = Unit { id: 90_001, owner: 1, kind: UK::Warrior, x: 0.0, y: 0.0, hp: 90.0, max: 90.0, task: Task::Idle, cd: 0.0, res: 0, carry: 0.0, ang: 0.0, poison: 0.0, poison_t: 0.0, moving: false, flee_t: 0.0, hurt_t: 0.0, act: 0, dead: false, weapon: Some(Tech::Spear) };
+    let bare = Unit { id: 90_002, owner: 2, kind: UK::Warrior, x: 1000.0, y: 0.0, hp: 90.0, max: 90.0, task: Task::Idle, cd: 0.0, res: 0, carry: 0.0, ang: 0.0, poison: 0.0, poison_t: 0.0, moving: false, flee_t: 0.0, hurt_t: 0.0, act: 0, dead: false, weapon: None };
+    let dummy1 = Unit { id: 90_003, owner: 2, kind: UK::Villager, x: armed.x + 10.0, y: armed.y, hp: 400.0, max: 400.0, task: Task::Idle, cd: 0.0, res: 0, carry: 0.0, ang: 0.0, poison: 0.0, poison_t: 0.0, moving: false, flee_t: 0.0, hurt_t: 0.0, act: 0, dead: false, weapon: None };
+    let dummy2 = Unit { id: 90_004, owner: 1, kind: UK::Villager, x: bare.x + 10.0, y: bare.y, hp: 400.0, max: 400.0, task: Task::Idle, cd: 0.0, res: 0, carry: 0.0, ang: 0.0, poison: 0.0, poison_t: 0.0, moving: false, flee_t: 0.0, hurt_t: 0.0, act: 0, dead: false, weapon: None };
+    w.units.push(armed);
+    w.units.push(bare);
+    w.units.push(dummy1);
+    w.units.push(dummy2);
+    w.command(1, &json!({ "t": "attack", "ids": [90_001], "target": 90_003 }));
+    w.command(2, &json!({ "t": "attack", "ids": [90_002], "target": 90_004 }));
+    run(&mut w, 2.0);
+    let hp1 = w.units.iter().find(|u| u.id == 90_003).unwrap().hp;
+    let hp2 = w.units.iter().find(|u| u.id == 90_004).unwrap().hp;
+    assert!(hp1 < hp2, "the spear-armed warrior should deal more damage than the bare one");
 }
 
 #[test]
@@ -125,7 +194,7 @@ fn a_tribe_without_its_great_hut_falls_and_can_start_again() {
     for _ in 0..30 {
         let id = w.units.iter().find(|u| u.owner == 2).map(|u| u.id).unwrap();
         let _ = id;
-        w.units.push(Unit { id: 90_000 + w.units.len() as u32, owner: 2, kind: UK::Warrior, x: x1 + 120.0, y: y1, hp: 400.0, max: 400.0, task: Task::Attack(c1), cd: 0.0, res: 0, carry: 0.0, ang: 0.0, poison: 0.0, poison_t: 0.0, moving: false, flee_t: 0.0, hurt_t: 0.0, act: 0, dead: false });
+        w.units.push(Unit { id: 90_000 + w.units.len() as u32, owner: 2, kind: UK::Warrior, x: x1 + 120.0, y: y1, hp: 400.0, max: 400.0, task: Task::Attack(c1), cd: 0.0, res: 0, carry: 0.0, ang: 0.0, poison: 0.0, poison_t: 0.0, moving: false, flee_t: 0.0, hurt_t: 0.0, act: 0, dead: false, weapon: None });
     }
     run(&mut w, 90.0);
     assert!(!w.tribes[&1].alive, "the great hut fell");
@@ -195,7 +264,7 @@ fn units_on_opposite_edges_fight_across_the_seam() {
     // a warrior of tribe 2 just across the seam from tribe 1's camp
     let (sx, sy) = if x1 < MAP / 2.0 { (x1 - 120.0 + MAP, y1) } else { (x1 + 120.0 - MAP, y1) };
     let id = 77_000;
-    w.units.push(Unit { id, owner: 2, kind: UK::Warrior, x: wrap(sx), y: wrap(sy), hp: 90.0, max: 90.0, task: Task::Attack(c1), cd: 0.0, res: 0, carry: 0.0, ang: 0.0, poison: 0.0, poison_t: 0.0, moving: false, flee_t: 0.0, hurt_t: 0.0, act: 0, dead: false });
+    w.units.push(Unit { id, owner: 2, kind: UK::Warrior, x: wrap(sx), y: wrap(sy), hp: 90.0, max: 90.0, task: Task::Attack(c1), cd: 0.0, res: 0, carry: 0.0, ang: 0.0, poison: 0.0, poison_t: 0.0, moving: false, flee_t: 0.0, hurt_t: 0.0, act: 0, dead: false, weapon: None });
     run(&mut w, 8.0);
     let hp = w.buildings.iter().find(|b| b.id == c1).unwrap().hp;
     assert!(hp < BK::Center.stats().hp, "the warrior reached the camp the short way and hit it");
@@ -248,4 +317,67 @@ fn the_people_look_like_the_animal_they_were() {
     assert_eq!((deer.diet, deer.horns, deer.hooves), (0, 2, true));
     // the coat is stable: the same animal always gets the same pattern
     assert_eq!(wolf, Look::from_carry(&w.tribes[&1].carry));
+}
+
+#[test]
+fn npc_tribes_are_created_and_act_on_their_own() {
+    let mut w = Tribes::new();
+    for _ in 0..4 {
+        w.manage_npc_population();
+        w.t += 31.0; // past the population check interval, so each call can spawn one more
+    }
+    let npcs: Vec<u32> = w.tribes.values().filter(|t| t.npc).map(|t| t.id).collect();
+    assert!(npcs.len() >= 3, "at least the minimum NPC population exists, got {}", npcs.len());
+    for _ in 0..600 {
+        w.step(0.05);
+        w.step_npcs(0.05);
+    }
+    let acted = npcs.iter().any(|id| {
+        w.tribes[id].research.is_some()
+            || !w.tribes[id].researched.is_empty()
+            || w.buildings.iter().any(|b| b.owner == *id && b.kind != BK::Center)
+            || w.units.iter().any(|u| u.owner == *id && u.kind == UK::Villager && u.task != Task::Idle)
+    });
+    assert!(acted, "NPC tribes should do something over time, not just sit idle");
+}
+
+#[test]
+fn npc_population_target_scales_with_players() {
+    // manage_npc_population only ever adds one NPC per call, so call it enough times (with the
+    // sim clock advanced past the check interval each time) to let the population settle at its target
+    let settle = |w: &mut Tribes| {
+        for _ in 0..12 {
+            w.manage_npc_population();
+            w.t += 31.0;
+        }
+        w.tribes.values().filter(|t| t.npc).count()
+    };
+    let mut w0 = Tribes::new();
+    let target_at_zero = settle(&mut w0);
+
+    let mut w6 = Tribes::new();
+    for id in 1..=6 {
+        w6.add_tribe(id, carry(&format!("p{id}"), Traits::default()));
+    }
+    let target_at_six = settle(&mut w6);
+    assert!(target_at_six > target_at_zero, "more real tribes should mean more NPC tribes targeted ({target_at_zero} vs {target_at_six})");
+}
+
+#[test]
+fn ai_only_commands_its_own_tribe() {
+    let mut w = Tribes::new();
+    w.add_tribe(1, carry("a", Traits::default()));
+    w.manage_npc_population();
+    w.t += 31.0;
+    w.manage_npc_population();
+    let before: Vec<u32> = w.units.iter().filter(|u| u.owner == 1).map(|u| u.id).collect();
+    for _ in 0..200 {
+        w.step(0.05);
+        w.step_npcs(0.05);
+    }
+    for id in before {
+        if let Some(u) = w.units.iter().find(|u| u.id == id) {
+            assert_eq!(u.owner, 1, "an NPC's commands must never change another tribe's ownership");
+        }
+    }
 }

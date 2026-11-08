@@ -43,8 +43,8 @@ struct NodeV {
 #[derive(Clone, Debug, PartialEq)]
 enum TAct {
     Build(BK),
-    Train(u32, UK),
-    Age,
+    Train(u32, UK, Option<Tech>),
+    Research(Tech),
     Respawn,
     CancelPlace,
 }
@@ -86,8 +86,6 @@ pub struct TribeGame {
     minimap_drag: bool,
     centered: bool,
 }
-
-const AGES: [&str; 3] = ["Gathering Age", "Hunter Age", "Chief Age"];
 
 fn owner_color(g: &TribeGame, owner: u32) -> u32 {
     if owner == 0 { 0x9a8a6a } else { g.names.get(&owner).map_or(0xcccccc, |n| n.1) }
@@ -381,33 +379,34 @@ impl TribeGame {
         match a {
             TAct::Build(k) => {
                 let s = k.stats();
-                if me.age < s.age {
-                    return self.say("Reach the next age first");
-                }
                 if !self.can_afford(s.cost) {
                     return self.say("Not enough resources");
                 }
                 self.place = Some(k);
                 self.say("Click the ground to build (right click cancels)");
             }
-            TAct::Train(b, u) => {
+            TAct::Train(b, u, weapon) => {
                 let s = u.stats();
-                if me.age < u.age() {
-                    return self.say("Reach the next age first");
-                }
                 if me.pop >= me.cap {
                     return self.say("Build more huts for room");
                 }
                 if !self.can_afford(s.cost) {
                     return self.say("Not enough resources");
                 }
-                self.cmd(json!({ "t": "train", "b": b, "u": format!("{u:?}").to_lowercase() }));
-            }
-            TAct::Age => {
-                if !self.can_afford(me.next_age) {
-                    return self.say("Not enough resources to age up");
+                let mut cmd = json!({ "t": "train", "b": b, "u": format!("{u:?}").to_lowercase() });
+                if let Some(w) = weapon {
+                    cmd["weapon"] = json!(w.def().key);
                 }
-                self.cmd(json!({ "t": "age" }));
+                self.cmd(cmd);
+            }
+            TAct::Research(tech) => {
+                if me.research.is_some() {
+                    return self.say("Already researching something");
+                }
+                if !self.can_afford(tech.def().cost) {
+                    return self.say("Not enough resources to research that");
+                }
+                self.cmd(json!({ "t": "research", "tech": tech.def().key }));
             }
             TAct::Respawn => self.cmd(json!({ "t": "respawn" })),
             TAct::CancelPlace => self.place = None,
@@ -885,11 +884,14 @@ impl TribeGame {
             g.text(labels[k], x + 16.0, 33.0, 9.0, false, 0xa8c890, "left", None);
         }
         g.text(&format!("POP {} / {}", me.pop, me.cap), 400.0, 20.0, 17.0, true, if me.pop >= me.cap { 0xff9a7a } else { 0xf4ffe6 }, "left", None);
-        g.text(AGES[(me.age as usize - 1).min(2)], 520.0, 20.0, 15.0, true, 0xffe9a8, "left", None);
-        if me.age < 3 {
-            let cost = me.next_age;
-            let ok = self.can_afford(cost);
-            self.button(g, 760.0, 20.0, 250.0, 32.0, &format!("AGE UP: {}", AGES[me.age as usize]), &format!("{}F {}W {}S", cost[0] as i64, cost[1] as i64, cost[2] as i64), ok, TAct::Age);
+        if let Some((tech, remaining, total)) = me.research {
+            let pct = ((1.0 - remaining / total) * 100.0).clamp(0.0, 100.0);
+            g.text(&format!("Researching {}: {:.0}%", tech.def().key, pct), 520.0, 20.0, 14.0, true, 0xffe9a8, "left", None);
+        } else {
+            for (k, tech) in TECH_LIST.into_iter().filter(|t| !me.researched.contains(t) && t.def().requires.is_none_or(|r| me.researched.contains(&r))).enumerate() {
+                let def = tech.def();
+                self.button(g, 620.0 + k as f64 * 135.0, 20.0, 125.0, 32.0, &format!("Research {}", def.key), &format!("{}F {}W{}", def.cost[0] as i64, def.cost[1] as i64, if def.cost[2] > 0.0 { format!(" {}S", def.cost[2] as i64) } else { String::new() }), self.can_afford(def.cost), TAct::Research(tech));
+            }
         }
         // board
         g.text("TRIBES", w - 20.0, 56.0, 12.0, true, 0xa8c890, "right", None);
@@ -939,13 +941,18 @@ impl TribeGame {
                 match kind {
                     BK::Center => {
                         let c = UK::Villager.stats().cost;
-                        self.button(g, x, h - 52.0, 120.0, 56.0, "Villager", &format!("{}F", c[0] as i64), self.can_afford(c), TAct::Train(bid, UK::Villager));
+                        self.button(g, x, h - 52.0, 120.0, 56.0, "Villager", &format!("{}F", c[0] as i64), self.can_afford(c), TAct::Train(bid, UK::Villager, None));
                     }
                     BK::Barracks => {
-                        for (k, u) in [UK::Warrior, UK::Archer].into_iter().enumerate() {
+                        let mut k = 0;
+                        for u in [UK::Warrior, UK::Archer] {
                             let c = u.stats().cost;
-                            let ok = self.can_afford(c) && me.age >= u.age();
-                            self.button(g, x + k as f64 * 130.0, h - 52.0, 120.0, 56.0, &format!("{u:?}"), &if me.age < u.age() { "Hunter Age".to_string() } else { format!("{}F {}W", c[0] as i64, c[1] as i64) }, ok, TAct::Train(bid, u));
+                            let tiers = std::iter::once(None).chain(me.researched.iter().copied().filter(|t| t.def().unit == u).map(Some));
+                            for weapon in tiers {
+                                let label = weapon.map_or(format!("{u:?}"), |w| format!("{u:?} ({})", w.def().key));
+                                self.button(g, x + k as f64 * 130.0, h - 52.0, 120.0, 56.0, &label, &format!("{}F {}W", c[0] as i64, c[1] as i64), self.can_afford(c), TAct::Train(bid, u, weapon));
+                                k += 1;
+                            }
                         }
                     }
                     _ => {}
@@ -958,9 +965,8 @@ impl TribeGame {
             g.text(&format!("{} villagers: build something", villagers), px + 12.0, h - 92.0, 13.0, true, 0xffe9a8, "left", None);
             for (k, kind) in [BK::Hut, BK::Farm, BK::Barracks, BK::Tower].into_iter().enumerate() {
                 let s = kind.stats();
-                let ok = me.age >= s.age && self.can_afford(s.cost);
-                let sub = if me.age < s.age { "Hunter Age".to_string() } else { format!("{}W{}", s.cost[1] as i64, if s.cost[2] > 0.0 { format!(" {}S", s.cost[2] as i64) } else { String::new() }) };
-                self.button(g, x + k as f64 * 130.0, h - 52.0, 120.0, 56.0, &format!("{kind:?}"), &sub, ok, TAct::Build(kind));
+                let sub = format!("{}W{}", s.cost[1] as i64, if s.cost[2] > 0.0 { format!(" {}S", s.cost[2] as i64) } else { String::new() });
+                self.button(g, x + k as f64 * 130.0, h - 52.0, 120.0, 56.0, &format!("{kind:?}"), &sub, self.can_afford(s.cost), TAct::Build(kind));
             }
             g.text("Right-click: gather, hunt, build, or move", px + 12.0, h - 20.0, 11.0, false, 0x8aa870, "left", None);
         } else if !sel_units.is_empty() {
