@@ -1,3 +1,2 @@
-data/
-*.db
-*.db-*
+server/data/
+*.sqlite*

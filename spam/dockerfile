@@ -1,15 +1,28 @@
-# spam: one image serving the static UI and the JSON API. Uses Node's built-in SQLite, so there
-# are no npm dependencies and no native build step. Build context is the spam/ directory.
-FROM node:22-alpine
+# spam: React Native (Expo) web build served by a Go (Gin + GORM + Goose) API on one port.
+# Build context is the spam/ directory.
+
+# 1) Export the React Native app for web
+FROM node:22-alpine AS web-build
 WORKDIR /app
-ENV NODE_ENV=production
-ENV PORT=8080
-ENV DATA_DIR=/data
+COPY app/package*.json ./
+RUN npm ci
+COPY app/ .
+RUN npx expo export --platform web
 
-COPY package.json server.js ./
-COPY public ./public
-RUN mkdir -p /data && chown node:node /data
+# 2) Build the Go server (pure-Go SQLite, so no CGO)
+FROM golang:1.26-alpine AS server-build
+WORKDIR /src
+COPY server/go.mod server/go.sum ./
+RUN go mod download
+COPY server/ .
+RUN CGO_ENABLED=0 GOOS=linux go build -o /spam-server ./cmd/server
 
-USER node
+# 3) Runtime
+FROM alpine:3.20
+RUN adduser -D -u 10001 spam && mkdir -p /data && chown spam /data
+COPY --from=server-build /spam-server /spam-server
+COPY --from=web-build /app/dist /web
+ENV APP_ENV=production PORT=8080 DATA_DIR=/data WEB_DIR=/web
+USER 10001
 EXPOSE 8080
-CMD ["node", "--disable-warning=ExperimentalWarning", "server.js"]
+ENTRYPOINT ["/spam-server"]

@@ -1,4 +1,4 @@
-# spam: threads-based social site. One pod serves the UI and the API; data lives in SQLite on a
+# spam: threads-based social site. One Go (Gin/GORM/Goose) pod serves the React Native web build and the API; data lives in SQLite on a
 # single ReadWriteOnce volume, so keep exactly one replica and replace it with Recreate.
 apiVersion: v1
 kind: PersistentVolumeClaim
@@ -32,7 +32,7 @@ spec:
       imagePullSecrets:
         - name: acr-pull-secret
       securityContext:
-        fsGroup: 1000 # the image runs as the non-root `node` user (uid 1000); let it write the volume
+        fsGroup: 10001 # the image runs as non-root uid 10001; let it write the volume
       containers:
         - name: prod-spam
           image: placeholder # replaced by pipeline via kubectl set image
@@ -40,6 +40,8 @@ spec:
           ports:
             - containerPort: 8080
           env:
+            - name: APP_ENV
+              value: production
             - name: PORT
               value: "8080"
             - name: DATA_DIR
