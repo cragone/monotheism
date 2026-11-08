@@ -15,8 +15,8 @@ func TestOpenAndDeviceRoundTrip(t *testing.T) {
 	device := models.Device{
 		UniqueID:           "plug-1",
 		Name:               "Office Plug",
-		StateTopic:         "cync_lan/plug-1/state",
-		CommandTopic:       "cync_lan/plug-1/set",
+		Host:               "192.168.1.26",
+		SwitchID:           0,
 		SupportsBrightness: true,
 	}
 	if err := gormDB.Create(&device).Error; err != nil {
