@@ -103,6 +103,37 @@
             echo "==> vecna frontend on http://localhost:5176 (proxying /api -> http://localhost:''${PORT:-8082})"
             npm run dev -- --port 5176 --strictPort
           '';
+
+          # The evo game: three Rust services (cell/land server, tribal server, and the
+          # wasm client). Ports are fixed, not configurable, because client/Trunk.toml
+          # hardcodes proxy targets at 4000 (server) and 4200 (tribe).
+          runEvo = pkgs.writeShellScriptBin "run-evo" ''
+            set -euo pipefail
+            root="$(git rev-parse --show-toplevel)/evo"
+
+            (
+              cd "$root/server"
+              export PORT=4000
+              export TRIBE_ADDR=127.0.0.1:4200
+              echo "==> evo server (cell + land stages) on http://localhost:4000"
+              cargo run
+            ) &
+            server_pid=$!
+
+            (
+              cd "$root/tribe"
+              export PORT=4200
+              echo "==> evo tribe server (tribal stage) on http://localhost:4200"
+              cargo run
+            ) &
+            tribe_pid=$!
+
+            trap 'kill "$server_pid" "$tribe_pid" 2>/dev/null || true' EXIT
+
+            cd "$root/client"
+            echo "==> evo client on http://localhost:8080 (trunk serve; proxies /api, /ws, /tribe)"
+            exec trunk serve
+          '';
         in
         {
           default = pkgs.mkShell {
@@ -116,11 +147,20 @@
               pkgs.sqlite
               pkgs.git
 
+              # evo (Rust + wasm): cargo/rustc from nixpkgs already bundle wasm32-unknown-unknown
+              # std, lld is needed to link it, and trunk fetches its own matching wasm-bindgen
+              # at build time so it doesn't need to match any nixpkgs wasm-bindgen-cli version.
+              pkgs.cargo
+              pkgs.rustc
+              pkgs.lld
+              pkgs.trunk
+
               runDb
               runLorena
               runCharlesragone
               runEileen
               runVecna
+              runEvo
             ];
 
             shellHook = ''
@@ -130,6 +170,7 @@
               echo "  run-charlesragone  -> charles API + client  (http://localhost:8080 / :5174)"
               echo "  run-eileen         -> eileen (biology) site (http://localhost:5175)"
               echo "  run-vecna          -> vecna API + client    (http://localhost:8082 / :5176)"
+              echo "  run-evo            -> evo server + tribe + client (http://localhost:8080 / :4000 / :4200)"
             '';
           };
         }

@@ -289,6 +289,13 @@ impl TribeGame {
             return self.minimap_to_cam(x, y);
         }
         if let Some(kind) = self.place {
+            // shift-clicking chains placements without re-picking the button; if a later one in
+            // the chain can no longer be afforded, stop silently swallowing clicks forever and
+            // drop back to normal selection/movement instead
+            if !self.can_afford(kind.stats().cost) {
+                self.place = None;
+                return self.say("Not enough resources to keep building");
+            }
             let (wx, wy) = self.s2w(x, y);
             let ids = self.my_selected_units();
             self.cmd(json!({ "t": "build", "ids": ids, "b": format!("{kind:?}").to_lowercase(), "x": wx.round(), "y": wy.round() }));
