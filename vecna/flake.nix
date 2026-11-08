@@ -21,6 +21,7 @@
               pkgs.go
               pkgs.gopls
               pkgs.git
+              pkgs.gh
             ];
 
             shellHook = ''
