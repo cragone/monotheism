@@ -20,6 +20,7 @@ func New(distFS fs.FS, db *gorm.DB, publisher handlers.DevicePublisher) *gin.Eng
 	api.GET("/health", handlers.Health)
 	api.GET("/devices", deviceHandlers.List)
 	api.GET("/devices/:id", deviceHandlers.Get)
+	api.PATCH("/devices/:id/name", deviceHandlers.Rename)
 	api.POST("/devices/:id/power", deviceHandlers.SetPower)
 	api.POST("/devices/:id/brightness", deviceHandlers.SetBrightness)
 
