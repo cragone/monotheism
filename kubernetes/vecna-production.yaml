@@ -1,9 +1,8 @@
-# NOTE: included for consistency with the other subprojects' deployment
-# manifests, but likely unused in practice — vecna talks directly to a
-# Shelly plug's local RPC API (see VECNA.md), which requires the running
-# pod to be on the same physical LAN as the plug, which the existing cloud
-# k8s cluster this repo deploys to is not. Apply this only if you're
-# running a Kubernetes node on your home network with that LAN reachability.
+# Applied to the single-node k3s cluster running on the bw-server home-LAN
+# host itself (see VECNA.md) — not the main cloud cluster, which has no
+# reachability to the Shelly plug's local RPC API. The image is built and
+# imported directly into that k3s node's containerd by
+# vecna/scripts/deploy-bw-server.sh, so no registry/imagePullSecrets needed.
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
@@ -34,12 +33,10 @@ spec:
       labels:
         app: prod-vecna
     spec:
-      imagePullSecrets:
-        - name: acr-pull-secret
       containers:
         - name: prod-vecna
-          image: placeholder # replaced by pipeline via kubectl set image
-          imagePullPolicy: Always
+          image: placeholder # replaced by deploy-bw-server.sh via kubectl set image
+          imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 80
           env:

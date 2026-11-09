@@ -73,6 +73,28 @@ SHELLY_HOST=192.168.1.26 docker compose up -d vecna
 
 run by hand on that home-LAN host.
 
+### k3s deploy (current setup: the "bw server")
+
+The bw server (`192.168.1.91`) runs its own single-node k3s cluster (added
+declaratively to its `/etc/nixos/configuration.nix` via `services.k3s`, not
+the `curl | sh` installer), so vecna deploys the same way every other service
+in this repo does: `kubernetes/vecna-production.yaml` (Deployment + PVC +
+Service) and `kubernetes/vecna-ingress.yaml` (Traefik BasicAuth Middleware +
+IngressRoute for `vecna.charlesragone.com`).
+
+`vecna/scripts/deploy-bw-server.sh [branch]` SSHes to that host, pulls,
+`docker build`s the image from `vecna/dockerfile`, imports it directly into
+k3s's containerd with `k3s ctr images import` (no registry — this node never
+needs to be pulled from over the internet), then applies the manifests and
+rolls out the new image.
+
+`vecna.charlesragone.com` is reached via a Cloudflare Tunnel running on the
+host (not a port-forward — the host's public IP is IPv6-only anyway), pointed
+at k3s's built-in Traefik on `localhost:80`. A BasicAuth Middleware sits in
+front of the IngressRoute so the plug control UI isn't open to the whole
+internet; the htpasswd Secret it reads from is created once by hand (see
+`kubernetes/vecna-ingress.yaml`) and never committed.
+
 ## Scope
 
 Single-plug MVP: on/off for one device, REST API polled by the frontend
