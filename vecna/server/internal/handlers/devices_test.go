@@ -59,6 +59,7 @@ func setup(t *testing.T) testFixture {
 	api := engine.Group("/api")
 	api.GET("/devices", h.List)
 	api.GET("/devices/:id", h.Get)
+	api.PATCH("/devices/:id/name", h.Rename)
 	api.POST("/devices/:id/power", h.SetPower)
 	api.POST("/devices/:id/brightness", h.SetBrightness)
 
@@ -137,6 +138,40 @@ func TestSetBrightnessValidatesRange(t *testing.T) {
 	rec := doRequest(fx.engine, http.MethodPost, fmt.Sprintf("/api/devices/%d/brightness", fx.dimmableID), brightnessRequest{Level: 500})
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400 for out-of-range level, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestRenameDevice(t *testing.T) {
+	fx := setup(t)
+
+	rec := doRequest(fx.engine, http.MethodPatch, fmt.Sprintf("/api/devices/%d/name", fx.onOffID), renameRequest{Name: "  Living Room Lamp  "})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	var device models.Device
+	if err := json.Unmarshal(rec.Body.Bytes(), &device); err != nil {
+		t.Fatalf("unmarshal response: %v", err)
+	}
+	if device.Name != "Living Room Lamp" {
+		t.Fatalf("expected trimmed name %q, got %q", "Living Room Lamp", device.Name)
+	}
+
+	rec = doRequest(fx.engine, http.MethodGet, fmt.Sprintf("/api/devices/%d", fx.onOffID), nil)
+	if err := json.Unmarshal(rec.Body.Bytes(), &device); err != nil {
+		t.Fatalf("unmarshal response: %v", err)
+	}
+	if device.Name != "Living Room Lamp" {
+		t.Fatalf("expected rename to persist, got %q", device.Name)
+	}
+}
+
+func TestRenameDeviceRejectsEmptyName(t *testing.T) {
+	fx := setup(t)
+
+	rec := doRequest(fx.engine, http.MethodPatch, fmt.Sprintf("/api/devices/%d/name", fx.onOffID), renameRequest{Name: "   "})
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for blank name, got %d: %s", rec.Code, rec.Body.String())
 	}
 }
 

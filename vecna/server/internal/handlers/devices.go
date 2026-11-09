@@ -3,6 +3,7 @@ package handlers
 import (
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
@@ -40,6 +41,37 @@ func (h *DeviceHandlers) Get(c *gin.Context) {
 	if !ok {
 		return
 	}
+	c.JSON(http.StatusOK, device)
+}
+
+type renameRequest struct {
+	Name string `json:"name"`
+}
+
+func (h *DeviceHandlers) Rename(c *gin.Context) {
+	device, ok := h.findDevice(c)
+	if !ok {
+		return
+	}
+
+	var req renameRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
+		return
+	}
+
+	name := strings.TrimSpace(req.Name)
+	if name == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "name must not be empty"})
+		return
+	}
+
+	if err := h.db.Model(&models.Device{}).Where("id = ?", device.ID).Update("name", name).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to rename device"})
+		return
+	}
+	device.Name = name
+
 	c.JSON(http.StatusOK, device)
 }
 

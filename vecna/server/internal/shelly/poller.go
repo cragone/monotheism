@@ -36,9 +36,10 @@ func Bootstrap(db *gorm.DB, client *Client, host, name string) (models.Device, e
 		device.LastPowerState = existing.LastPowerState
 		device.LastBrightness = existing.LastBrightness
 		device.LastSeenAt = existing.LastSeenAt
-		if device.Name == "" {
-			device.Name = existing.Name
-		}
+		// Once a device is known, its name is whatever the user set via the
+		// UI/API, not SHELLY_NAME — otherwise every restart would clobber a
+		// rename back to the env var's value.
+		device.Name = existing.Name
 	}
 
 	if err := db.Save(&device).Error; err != nil {

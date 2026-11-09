@@ -26,6 +26,14 @@ export function getDevice(id: number): Promise<Device> {
   return fetch(`/api/devices/${id}`).then((res) => handle<Device>(res));
 }
 
+export function renameDevice(id: number, name: string): Promise<Device> {
+  return fetch(`/api/devices/${id}/name`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name }),
+  }).then((res) => handle<Device>(res));
+}
+
 export function setPower(id: number, on: boolean): Promise<Device> {
   return fetch(`/api/devices/${id}/power`, {
     method: "POST",
