@@ -1,0 +1,19 @@
+[
+  {
+    "id": "deploy-vecna",
+    "execute-command": "/home/charlie/monotheism/vecna/scripts/deploy-local.sh",
+    "command-working-directory": "/home/charlie/monotheism",
+    "response-message": "Deploying vecna...",
+    "include-command-output-in-response": true,
+    "trigger-rule": {
+      "match": {
+        "type": "value",
+        "value": "REPLACE_WITH_A_LONG_RANDOM_TOKEN",
+        "parameter": {
+          "source": "header",
+          "name": "X-Deploy-Token"
+        }
+      }
+    }
+  }
+]
