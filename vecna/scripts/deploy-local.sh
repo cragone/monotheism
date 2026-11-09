@@ -11,6 +11,14 @@ set -euo pipefail
 REPO_DIR="/home/charlie/monotheism"
 BRANCH="${1:-}"
 
+# Idempotent cleanup of the old pre-k3s deploy (a /tmp/vecna-server binary
+# run directly in tmux, bound straight to host port 80): if it's still
+# running, it wins the race for port 80 over k3s's Traefik, which makes the
+# BasicAuth middleware and everything else in the IngressRoute a no-op since
+# traffic never reaches Traefik at all. Match by exact process name, not -f,
+# so this can't ever match its own invocation's command line.
+pkill -x vecna-server 2>/dev/null || true
+
 cd "$REPO_DIR"
 git fetch origin
 if [ -n "$BRANCH" ]; then
