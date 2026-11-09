@@ -82,18 +82,44 @@ in this repo does: `kubernetes/vecna-production.yaml` (Deployment + PVC +
 Service) and `kubernetes/vecna-ingress.yaml` (Traefik BasicAuth Middleware +
 IngressRoute for `vecna.charlesragone.com`).
 
-`vecna/scripts/deploy-bw-server.sh [branch]` SSHes to that host, pulls,
-`docker build`s the image from `vecna/dockerfile`, imports it directly into
-k3s's containerd with `k3s ctr images import` (no registry — this node never
-needs to be pulled from over the internet), then applies the manifests and
-rolls out the new image.
+The actual deploy logic lives in `vecna/scripts/deploy-local.sh`, which runs
+*on* the bw server: pulls, `docker build`s the image from `vecna/dockerfile`,
+imports it directly into k3s's containerd with `k3s ctr images import` (no
+registry — this node never needs to be pulled from over the internet), then
+applies the manifests and rolls out the new image. It's invoked two ways:
+
+- **By hand**, from your own machine: `vecna/scripts/deploy-bw-server.sh [branch]`,
+  which just SSHes in and runs `deploy-local.sh` remotely.
+- **By CI** (`.github/workflows/production_vecna.yml`, on push to `main`):
+  since this repo is public and the bw server is a home box controlling
+  physical hardware, CI deliberately does *not* get SSH access (a self-hosted
+  GitHub Actions runner here would mean anyone opening a PR could run code on
+  it). Instead it POSTs a shared secret to a small token-gated webhook running
+  on the host (`adnanh/webhook`, config in `vecna/scripts/hooks.json` — real
+  secret never committed, see `hooks.json.example`), which runs
+  `deploy-local.sh` for it. The secret is `VECNA_DEPLOY_TOKEN` in both the
+  repo's GitHub Actions secrets and a local `.env`.
 
 `vecna.charlesragone.com` is reached via a Cloudflare Tunnel running on the
 host (not a port-forward — the host's public IP is IPv6-only anyway), pointed
-at k3s's built-in Traefik on `localhost:80`. A BasicAuth Middleware sits in
-front of the IngressRoute so the plug control UI isn't open to the whole
-internet; the htpasswd Secret it reads from is created once by hand (see
-`kubernetes/vecna-ingress.yaml`) and never committed.
+at k3s's built-in Traefik on `localhost:80`. The same tunnel exposes the
+deploy webhook at `deploy-vecna.charlesragone.com`, pointed directly at the
+webhook process rather than through k3s. A BasicAuth Middleware sits in front
+of the vecna IngressRoute (not the webhook, which has its own token check) so
+the plug control UI isn't open to the whole internet; the htpasswd Secret it
+reads from is created once by hand (see `kubernetes/vecna-ingress.yaml`) and
+never committed.
+
+#### Host setup (`/etc/nixos/configuration.nix` on the bw server)
+
+Declared there, not in this repo: `services.k3s.enable = true;`, a
+`systemd.services.cloudflared-tunnel` unit running
+`cloudflared tunnel --config ~/.cloudflared/config.yml run`, a
+`systemd.services.vecna-deploy-webhook` unit running
+`webhook -hooks vecna/scripts/hooks.json -port 8088`, and a scoped
+`security.sudo.extraRules` entry letting `charlie` run `k3s` passwordlessly
+(needed since the webhook runs unattended, with no terminal to type a sudo
+password into).
 
 ## Scope
 

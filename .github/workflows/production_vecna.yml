@@ -1,0 +1,30 @@
+name: Production Deployment of vecna.charlesragone.com
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "vecna/**"
+      - "kubernetes/vecna-production.yaml"
+      - "kubernetes/vecna-ingress.yaml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    name: Trigger deploy webhook
+    runs-on: ubuntu-latest
+    environment: Production
+
+    steps:
+      # No SSH/runner on the bw-server: it's a home-LAN box reachable only
+      # through its Cloudflare Tunnel, which exposes a small token-gated
+      # webhook (see vecna/scripts/hooks.json.example) that runs
+      # vecna/scripts/deploy-local.sh on the host itself.
+      - name: Trigger vecna deploy webhook
+        run: |
+          curl -sS --fail -X POST \
+            -H "X-Deploy-Token: ${{ secrets.VECNA_DEPLOY_TOKEN }}" \
+            https://deploy-vecna.charlesragone.com/hooks/deploy-vecna
