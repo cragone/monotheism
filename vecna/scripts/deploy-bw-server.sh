@@ -1,26 +1,25 @@
 #!/usr/bin/env bash
-# Manual deploy to the bw server (192.168.1.91): pulls the given branch (or
-# whatever's currently checked out there if none given), builds the
-# frontend+backend inside vecna's nix dev shell, and (re)starts the server
-# in a detached tmux session so it survives after this script exits.
+# Manual deploy to the bw server's k3s cluster (192.168.1.91): pulls the
+# given branch (or whatever's currently checked out there if none given),
+# builds the vecna Docker image on the host, imports it straight into k3s's
+# containerd (no registry — this node never needs internet-wide pulls), and
+# applies/rolls out the k8s manifests.
 #
 # Usage: scripts/deploy-bw-server.sh [branch]
 set -euo pipefail
 
 HOST="charlie@192.168.1.91"
 REPO_DIR="/home/charlie/monotheism"
-SESSION="vecna"
 # ssh doesn't preserve an empty positional argument across the wire (it
 # space-joins argv for the remote shell to re-split, and an empty token
 # doesn't survive that), so use a sentinel instead of "" to mean "no branch
 # given, just pull whatever's checked out".
 BRANCH="${1:-__CURRENT__}"
 
-ssh "$HOST" bash -s -- "$REPO_DIR" "$SESSION" "$BRANCH" <<'REMOTE'
+ssh "$HOST" bash -s -- "$REPO_DIR" "$BRANCH" <<'REMOTE'
 set -euo pipefail
 REPO_DIR="$1"
-SESSION="$2"
-BRANCH="$3"
+BRANCH="$2"
 
 cd "$REPO_DIR"
 git fetch origin
@@ -29,33 +28,21 @@ if [ "$BRANCH" != "__CURRENT__" ]; then
 fi
 git pull --ff-only
 
+SHA="$(git rev-parse --short HEAD)"
+IMAGE="vecna:$SHA"
+
 cd "$REPO_DIR/vecna"
-nix develop --command bash -c '
-  set -euo pipefail
-  npm ci
-  npm run build
-  rm -rf server/web/dist
-  mkdir -p server/web/dist
-  cp -r dist/. server/web/dist/
-  cd server
-  CGO_ENABLED=0 go build -o /tmp/vecna-server ./cmd/server
-'
+docker build -t "$IMAGE" -f dockerfile .
 
-# Port 80 needs CAP_NET_BIND_SERVICE; the binary gets a fresh inode on every
-# build above, so the capability has to be re-applied each time. This relies
-# on a NOPASSWD sudoers rule scoped to exactly this command (see VECNA.md).
-sudo -n setcap 'cap_net_bind_service=+ep' /tmp/vecna-server
+# k3s uses containerd, not the host's docker daemon, so the freshly built
+# image has to be handed over explicitly rather than just being "docker run"-able.
+docker save "$IMAGE" | sudo k3s ctr images import -
 
-tmux kill-session -t "$SESSION" 2>/dev/null || true
-tmux new-session -d -s "$SESSION" -c "$REPO_DIR/vecna/server" "/tmp/vecna-server"
+cd "$REPO_DIR"
+sudo k3s kubectl apply -f kubernetes/vecna-production.yaml
+sudo k3s kubectl apply -f kubernetes/vecna-ingress.yaml
+sudo k3s kubectl -n default set image deployment/prod-vecna prod-vecna="$IMAGE"
+sudo k3s kubectl -n default rollout status deployment/prod-vecna
 
-sleep 1
-if tmux has-session -t "$SESSION" 2>/dev/null; then
-  echo "Deployed. tmux session '$SESSION' running on $(hostname)."
-else
-  echo "tmux session died immediately - check /tmp/vecna-server manually." >&2
-  exit 1
-fi
+echo "Deployed $IMAGE to k3s on $(hostname)."
 REMOTE
-
-echo "Attach with: ssh $HOST -t tmux attach -t $SESSION"

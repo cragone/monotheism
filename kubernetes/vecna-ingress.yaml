@@ -1,0 +1,40 @@
+# BasicAuth-protected Traefik route for vecna.charlesragone.com, reached via
+# a Cloudflare Tunnel on the bw-server host rather than a public ingress IP
+# (see VECNA.md). The htpasswd credentials live in the vecna-basic-auth
+# Secret, created once by hand on the host (never committed). An htpasswd
+# line (user "ragoglynn") already sits at /home/charlie/vecna-basic-auth-users
+# on the bw-server host, generated via `openssl passwd -apr1` since the host
+# has no `htpasswd` binary — once k3s is up, create the secret from it:
+#
+#   sudo k3s kubectl create secret generic vecna-basic-auth \
+#     --from-file=users=/home/charlie/vecna-basic-auth-users -n default
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: vecna-basic-auth
+  namespace: default
+spec:
+  basicAuth:
+    secret: vecna-basic-auth
+---
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: vecna-web
+  namespace: default
+spec:
+  # "web" (plain HTTP, :80), not "websecure": the Cloudflare Tunnel terminates
+  # TLS at Cloudflare's edge and talks to this node over loopback-only HTTP
+  # (config.yml's `service: http://localhost:80`), so Traefik needs no cert
+  # of its own here.
+  entryPoints:
+    - web
+  routes:
+    - match: Host(`vecna.charlesragone.com`)
+      kind: Rule
+      priority: 10
+      middlewares:
+        - name: vecna-basic-auth
+      services:
+        - name: prod-vecna-service
+          port: 80

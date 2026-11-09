@@ -73,37 +73,27 @@ SHELLY_HOST=192.168.1.26 docker compose up -d vecna
 
 run by hand on that home-LAN host.
 
-### Manual bare-metal deploy (current setup: the "bw server")
+### k3s deploy (current setup: the "bw server")
 
-`vecna/scripts/deploy-bw-server.sh [branch]` SSHes to the home-LAN host,
-pulls, builds frontend+backend inside `nix develop`, and (re)starts the
-server in a detached tmux session (`tmux attach -t vecna` to watch it) —
-no CI, no systemd unit, just a manual script for now.
+The bw server (`192.168.1.91`) runs its own single-node k3s cluster (added
+declaratively to its `/etc/nixos/configuration.nix` via `services.k3s`, not
+the `curl | sh` installer), so vecna deploys the same way every other service
+in this repo does: `kubernetes/vecna-production.yaml` (Deployment + PVC +
+Service) and `kubernetes/vecna-ingress.yaml` (Traefik BasicAuth Middleware +
+IngressRoute for `vecna.charlesragone.com`).
 
-It serves on port 80, which on Linux needs either root or the
-`CAP_NET_BIND_SERVICE` capability — the script re-applies that capability
-to the freshly built binary on every deploy (`setcap` loses it on rebuild
-since each build is a new file/inode). That `setcap` call needs root, so
-the target host's NixOS config needs both the port opened and a sudoers
-rule scoping passwordless `setcap` to exactly that one command:
+`vecna/scripts/deploy-bw-server.sh [branch]` SSHes to that host, pulls,
+`docker build`s the image from `vecna/dockerfile`, imports it directly into
+k3s's containerd with `k3s ctr images import` (no registry — this node never
+needs to be pulled from over the internet), then applies the manifests and
+rolls out the new image.
 
-```nix
-networking.firewall.allowedTCPPorts = [ 80 ];
-
-security.sudo.extraRules = [
-  {
-    users = [ "charlie" ];
-    commands = [
-      {
-        command = "/run/current-system/sw/bin/setcap cap_net_bind_service=+ep /tmp/vecna-server";
-        options = [ "NOPASSWD" ];
-      }
-    ];
-  }
-];
-```
-
-then `sudo nixos-rebuild switch` once on that host.
+`vecna.charlesragone.com` is reached via a Cloudflare Tunnel running on the
+host (not a port-forward — the host's public IP is IPv6-only anyway), pointed
+at k3s's built-in Traefik on `localhost:80`. A BasicAuth Middleware sits in
+front of the IngressRoute so the plug control UI isn't open to the whole
+internet; the htpasswd Secret it reads from is created once by hand (see
+`kubernetes/vecna-ingress.yaml`) and never committed.
 
 ## Scope
 
