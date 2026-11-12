@@ -97,8 +97,22 @@ jobs:
             echo "Updating image to: $IMAGE"
             sudo kubectl -n argus set image daemonset/argus-agent agent="$IMAGE"
 
-            echo "Waiting for rollout..."
-            sudo kubectl -n argus rollout status daemonset/argus-agent
+            echo "Waiting for rollout (bounded -- diagnostics follow either way)..."
+            sudo kubectl -n argus rollout status daemonset/argus-agent --timeout=90s || ROLLOUT_FAILED=1
+
+            echo "--- pods ---"
+            sudo kubectl -n argus get pods -o wide
+            echo "--- describe ---"
+            sudo kubectl -n argus describe pod -l app=argus-agent
+            echo "--- recent logs ---"
+            sudo kubectl -n argus logs -l app=argus-agent --tail=100 --all-containers --prefix || true
+            echo "--- events ---"
+            sudo kubectl -n argus get events --sort-by=.lastTimestamp | tail -30
+
+            if [ -n "${ROLLOUT_FAILED:-}" ]; then
+              echo "FAILED: rollout did not become ready, see diagnostics above"
+              exit 1
+            fi
 
             echo "SUCCESS: Deployed $IMAGE"
             echo "======END======"
