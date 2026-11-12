@@ -51,6 +51,8 @@ spec:
       labels: { app: argus-agent }
     spec:
       serviceAccountName: argus-agent
+      imagePullSecrets:
+        - name: acr-pull-secret
       tolerations:
         - operator: Exists # also run on tainted nodes
       containers:
