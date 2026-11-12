@@ -1,0 +1,106 @@
+name: Roll out argus-agent to the Azure cluster
+
+# Manual only: this ships super-argus's agent (source lives in a separate
+# repo, github.com/cragone/super-argus, not here) as a DaemonSet into the
+# Azure cluster, monitoring everything this repo deploys there (see
+# ARGUS.md). Deliberately workflow_dispatch-only rather than triggered on
+# push -- the agent image changes rarely, and there's no path in this repo
+# whose changes should auto-trigger a build from a different repo's source.
+#
+# One-time prerequisite before the first run: mint an `azure-agent` ingest
+# key from the running Argus server (see ARGUS.md's service whitelist) and
+# add it as the ARGUS_AGENT_API_KEY secret in this repo's Production
+# environment.
+on:
+  workflow_dispatch:
+    inputs:
+      super_argus_ref:
+        description: "super-argus git ref to build the agent image from"
+        required: false
+        default: "main"
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    name: Deploy argus-agent DaemonSet
+    runs-on: ubuntu-latest
+    environment: Production
+
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v4
+
+      - name: Configure SSH known_hosts
+        run: |
+          mkdir -p ~/.ssh
+          ssh-keyscan -H "${{ secrets.AZURE_VM_IP }}" >> ~/.ssh/known_hosts
+
+      - name: SSH into VM and deploy
+        uses: appleboy/ssh-action@v0.1.6
+        with:
+          host: ${{ secrets.AZURE_VM_IP }}
+          username: azureuser
+          key: ${{ secrets.AZURE_PEM_PRIVATE_KEY }}
+          envs: SUPER_ARGUS_REF
+          script: |
+            set -euo pipefail
+
+            echo "Updating monotheism checkout for kubernetes/argus-agent-production.yaml..."
+            cd monotheism
+            git fetch origin main
+            git reset --hard origin/main
+            cd ..
+
+            echo "Updating super-argus checkout (agent source lives there, not in monotheism)..."
+            if [ -d super-argus ]; then
+              cd super-argus && git fetch origin && git checkout "$SUPER_ARGUS_REF" && git reset --hard "origin/$SUPER_ARGUS_REF" 2>/dev/null || git reset --hard "$SUPER_ARGUS_REF"
+            else
+              git clone https://github.com/cragone/super-argus.git
+              cd super-argus && git checkout "$SUPER_ARGUS_REF"
+            fi
+            SHA="$(git rev-parse --short HEAD)"
+            cd ..
+
+            # -------------------------
+            # Docker build + push
+            # -------------------------
+            ACR="${{ secrets.ACR_LOGIN_SERVER }}"
+            IMAGE="$ACR/argus-agent:$SHA"
+
+            echo "Logging in to ACR: $ACR"
+            echo "${{ secrets.ACR_PASSWORD }}" | sudo docker login "$ACR" -u "${{ secrets.ACR_USERNAME }}" --password-stdin
+
+            echo "Building docker image: $IMAGE"
+            sudo docker build -t "$IMAGE" -f super-argus/agent/Dockerfile super-argus
+
+            echo "Pushing docker image: $IMAGE"
+            sudo docker push "$IMAGE"
+
+            # -------------------------
+            # Kubernetes apply phase
+            # -------------------------
+            cd monotheism
+
+            echo "Ensuring argus namespace exists"
+            sudo kubectl create namespace argus --dry-run=client -o yaml | sudo kubectl apply -f -
+
+            echo "Ensuring argus-agent ingest key secret exists"
+            sudo kubectl -n argus create secret generic argus-agent \
+              --from-literal=api-key="${{ secrets.ARGUS_AGENT_API_KEY }}" \
+              --dry-run=client -o yaml | sudo kubectl apply -f -
+
+            echo "Applying DaemonSet + RBAC"
+            sudo kubectl apply -f kubernetes/argus-agent-production.yaml
+
+            echo "Updating image to: $IMAGE"
+            sudo kubectl -n argus set image daemonset/argus-agent agent="$IMAGE"
+
+            echo "Waiting for rollout..."
+            sudo kubectl -n argus rollout status daemonset/argus-agent
+
+            echo "SUCCESS: Deployed $IMAGE"
+            echo "======END======"
+        env:
+          SUPER_ARGUS_REF: ${{ inputs.super_argus_ref }}
