@@ -91,6 +91,18 @@ jobs:
               --from-literal=api-key="${{ secrets.ARGUS_AGENT_API_KEY }}" \
               --dry-run=client -o yaml | sudo kubectl apply -f -
 
+            # Secrets are namespace-scoped: the acr-pull-secret every other
+            # Deployment references already exists in `default` (created by
+            # hand, same as this repo's other once-off secrets) but not in
+            # the new `argus` namespace, which is why the first rollout hit
+            # ImagePullBackOff with an anonymous-pull 401 from ACR.
+            echo "Ensuring acr-pull-secret exists in the argus namespace"
+            sudo kubectl -n argus create secret docker-registry acr-pull-secret \
+              --docker-server="$ACR" \
+              --docker-username="${{ secrets.ACR_USERNAME }}" \
+              --docker-password="${{ secrets.ACR_PASSWORD }}" \
+              --dry-run=client -o yaml | sudo kubectl apply -f -
+
             echo "Applying DaemonSet + RBAC"
             sudo kubectl apply -f kubernetes/argus-agent-production.yaml
 
