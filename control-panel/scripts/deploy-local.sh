@@ -39,7 +39,12 @@ echo "==> Building backend..."
 cd "$CODE_DIR/web"
 go build -o main
 
-echo "==> Restarting service..."
+echo "==> Building kiosk..."
+cd "$CODE_DIR/kiosk"
+cargo build --release
+
+echo "==> Restarting services..."
 sudo systemctl restart control-panel-web
+sudo systemctl restart cage-tty1
 
 echo "Deployed $(git -C "$CODE_DIR" rev-parse --short HEAD) to $(hostname)."
