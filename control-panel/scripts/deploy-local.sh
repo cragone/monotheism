@@ -25,7 +25,10 @@ git pull --ff-only
 
 echo "==> Building frontend..."
 cd "$CODE_DIR/client"
-bun install --frozen-lockfile
+# --ignore-scripts: one dependency ships an npm "bun" shim whose postinstall
+# tries (and fails) to download a prebuilt binary for this arch -- harmless
+# to skip since we're already running the real, Nix-provided bun.
+bun install --frozen-lockfile --ignore-scripts
 bun run build.ts
 
 echo "==> Replacing dist..."
