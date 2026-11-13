@@ -1,0 +1,19 @@
+[
+  {
+    "id": "deploy-control-panel",
+    "execute-command": "/home/charlie/monotheism/control-panel/scripts/deploy-local.sh",
+    "command-working-directory": "/home/charlie/monotheism",
+    "response-message": "Deploying control-panel...",
+    "include-command-output-in-response": true,
+    "trigger-rule": {
+      "match": {
+        "type": "value",
+        "value": "REPLACE_WITH_A_LONG_RANDOM_TOKEN",
+        "parameter": {
+          "source": "header",
+          "name": "X-Deploy-Token"
+        }
+      }
+    }
+  }
+]

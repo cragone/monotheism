@@ -1,0 +1,121 @@
+# Applied to the single-node k3s cluster running on the raspi5 host itself
+# (see CONTROL-PANEL.md) — control-panel's code lives in its own repo
+# (cragone/control-panel), cloned separately on the host; this repo only
+# carries the deploy orchestration. The web image is built and imported
+# directly into that k3s node's containerd by
+# control-panel/scripts/deploy-local.sh, so no registry/imagePullSecrets
+# needed.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: prod-control-panel-broker-conf
+  namespace: default
+data:
+  mosquitto.conf: |
+    listener 1883
+    allow_anonymous true
+    persistence true
+    persistence_location /mosquitto/data/
+    log_dest stdout
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: prod-control-panel-broker
+  namespace: default
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: prod-control-panel-broker
+  template:
+    metadata:
+      labels:
+        app: prod-control-panel-broker
+    spec:
+      containers:
+        - name: broker
+          image: eclipse-mosquitto
+          ports:
+            - containerPort: 1883
+          volumeMounts:
+            - name: conf
+              mountPath: /mosquitto/config/mosquitto.conf
+              subPath: mosquitto.conf
+            - name: data
+              mountPath: /mosquitto/data
+      volumes:
+        - name: conf
+          configMap:
+            name: prod-control-panel-broker-conf
+        # Retained-message state only; not worth a PVC for an MVP on/off
+        # control panel (unlike vecna's SQLite history).
+        - name: data
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: prod-control-panel-broker-service
+  namespace: default
+spec:
+  selector:
+    app: prod-control-panel-broker
+  ports:
+    - protocol: TCP
+      port: 1883
+      targetPort: 1883
+  type: ClusterIP
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: prod-control-panel-web
+  namespace: default
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: prod-control-panel-web
+  template:
+    metadata:
+      labels:
+        app: prod-control-panel-web
+    spec:
+      containers:
+        - name: prod-control-panel-web
+          image: placeholder # replaced by deploy-local.sh via kubectl set image
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 80
+          env:
+            - name: MQTT_BROKER
+              value: prod-control-panel-broker-service
+          readinessProbe:
+            httpGet:
+              path: /api/health
+              port: 80
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /api/health
+              port: 80
+            initialDelaySeconds: 15
+            periodSeconds: 20
+            failureThreshold: 3
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: prod-control-panel-web-service
+  namespace: default
+spec:
+  selector:
+    app: prod-control-panel-web
+  ports:
+    - protocol: TCP
+      port: 80
+      targetPort: 80
+  type: ClusterIP
