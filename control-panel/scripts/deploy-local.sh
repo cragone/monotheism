@@ -1,11 +1,15 @@
 #!/usr/bin/env bash
 # Runs ON the raspi5 host itself: pulls the given branch (or whatever's
 # currently checked out if none given) of the *separate* cragone/control-panel
-# repo, builds its frontend+backend natively (no Docker/k3s -- this host is
-# a single always-on kiosk display, not a cluster), and restarts the
-# systemd service. Called either by the deploy webhook (see
-# hooks.json.example + CONTROL-PANEL.md) or by hand via deploy-raspi5.sh
-# from another machine.
+# repo, builds its kiosk/ Rust binary natively (no Docker/k3s -- this host is
+# a single always-on kiosk display, not a cluster), and restarts the cage
+# session. Called either by the deploy webhook (see hooks.json.example +
+# CONTROL-PANEL.md) or by hand via deploy-raspi5.sh from another machine.
+#
+# The kiosk talks directly to vecna's API for device names/state and
+# control (see CONTROL-PANEL.md) -- there's no local MQTT broker, Go
+# backend, or ESP32 hardware bridge involved on this host at all, so
+# client/ and web/ in the control-panel repo aren't built here.
 #
 # This repo (monotheism) only carries the deploy orchestration; control-panel's
 # app code lives in its own repo, checked out separately on the host.
@@ -23,28 +27,11 @@ if [ -n "$BRANCH" ]; then
 fi
 git pull --ff-only
 
-echo "==> Building frontend..."
-cd "$CODE_DIR/client"
-# --ignore-scripts: one dependency ships an npm "bun" shim whose postinstall
-# tries (and fails) to download a prebuilt binary for this arch -- harmless
-# to skip since we're already running the real, Nix-provided bun.
-bun install --frozen-lockfile --ignore-scripts
-bun run build.ts
-
-echo "==> Replacing dist..."
-rm -rf "$CODE_DIR/web/dist"
-mv "$CODE_DIR/client/dist" "$CODE_DIR/web/dist"
-
-echo "==> Building backend..."
-cd "$CODE_DIR/web"
-go build -o main
-
 echo "==> Building kiosk..."
 cd "$CODE_DIR/kiosk"
 cargo build --release
 
-echo "==> Restarting services..."
-sudo systemctl restart control-panel-web
+echo "==> Restarting kiosk session..."
 sudo systemctl restart cage-tty1
 
 echo "Deployed $(git -C "$CODE_DIR" rev-parse --short HEAD) to $(hostname)."
