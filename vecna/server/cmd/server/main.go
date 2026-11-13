@@ -18,32 +18,32 @@ func main() {
 
 	cfg := config.Load()
 	if cfg.ShellyHost == "" {
-		log.Fatal("SHELLY_HOST is required")
+		log.Fatal("fatal: SHELLY_HOST is required")
 	}
 
 	gormDB, err := db.Open(cfg.DataDir)
 	if err != nil {
-		log.Fatalf("db init: %v", err)
+		log.Fatalf("fatal: db init: %v", err)
 	}
 
 	shellyClient := shelly.NewClient()
 	device, err := shelly.Bootstrap(gormDB, shellyClient, cfg.ShellyHost, cfg.ShellyName)
 	if err != nil {
-		log.Fatalf("shelly bootstrap: %v", err)
+		log.Fatalf("fatal: shelly bootstrap: %v", err)
 	}
-	log.Printf("shelly: registered %q (%s) at %s", device.Name, device.UniqueID, device.Host)
+	log.Printf("info: shelly: registered %q (%s) at %s", device.Name, device.UniqueID, device.Host)
 
 	go shelly.PollForever(gormDB, shellyClient)
 
 	distFS, err := fs.Sub(webassets.DistFS, "dist")
 	if err != nil {
-		log.Fatalf("embed fs: %v", err)
+		log.Fatalf("fatal: embed fs: %v", err)
 	}
 
 	engine := router.New(distFS, gormDB, shellyClient)
 
-	log.Printf("vecna server listening on :%s", cfg.Port)
+	log.Printf("info: vecna server listening on :%s", cfg.Port)
 	if err := engine.Run(":" + cfg.Port); err != nil {
-		log.Fatalf("server exited: %v", err)
+		log.Fatalf("fatal: server exited: %v", err)
 	}
 }

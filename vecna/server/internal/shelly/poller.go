@@ -59,14 +59,14 @@ func PollForever(db *gorm.DB, client *Client) {
 	for range ticker.C {
 		var devices []models.Device
 		if err := db.Find(&devices).Error; err != nil {
-			log.Printf("shelly: poll: list devices: %v", err)
+			log.Printf("error: shelly: poll: list devices: %v", err)
 			continue
 		}
 
 		for _, d := range devices {
 			on, err := client.GetOn(d.Host, d.SwitchID)
 			if err != nil {
-				log.Printf("shelly: poll %s: %v", d.Host, err)
+				log.Printf("error: shelly: poll %s: %v", d.Host, err)
 				continue
 			}
 
@@ -76,7 +76,7 @@ func PollForever(db *gorm.DB, client *Client) {
 			}
 			updates := map[string]any{"last_power_state": state, "last_seen_at": time.Now()}
 			if err := db.Model(&models.Device{}).Where("id = ?", d.ID).Updates(updates).Error; err != nil {
-				log.Printf("shelly: poll %s: update device: %v", d.Host, err)
+				log.Printf("error: shelly: poll %s: update device: %v", d.Host, err)
 			}
 		}
 	}
