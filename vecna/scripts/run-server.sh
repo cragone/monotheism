@@ -6,8 +6,9 @@ cd "$(dirname "$0")/../server"
 
 export PORT="${PORT:-4000}"
 export DATA_DIR="${DATA_DIR:-./data}"
-: "${SHELLY_HOST:?Set SHELLY_HOST to the plug's LAN IP/hostname, e.g. 192.168.1.26}"
-export SHELLY_HOST
+# Optional: seeds one device at startup from SHELLY_HOST/SHELLY_NAME. Not
+# required — devices can also be added at runtime via the /settings page.
+export SHELLY_HOST="${SHELLY_HOST:-}"
 export SHELLY_NAME="${SHELLY_NAME:-}"
 
 exec go run ./cmd/server

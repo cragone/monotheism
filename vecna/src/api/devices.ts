@@ -1,7 +1,11 @@
+import type { DeviceType } from "../deviceTypes";
+
 export interface Device {
   id: number;
   uniqueId: string;
   name: string;
+  deviceType: DeviceType;
+  host: string;
   supportsBrightness: boolean;
   lastPowerState: string;
   lastBrightness: number;
@@ -48,4 +52,26 @@ export function setBrightness(id: number, level: number): Promise<Device> {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ level }),
   }).then((res) => handle<Device>(res));
+}
+
+export function createDevice(input: { host: string; name: string; deviceType: DeviceType }): Promise<Device> {
+  return fetch("/api/devices", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  }).then((res) => handle<Device>(res));
+}
+
+export function updateDeviceType(id: number, deviceType: DeviceType): Promise<Device> {
+  return fetch(`/api/devices/${id}/type`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ deviceType }),
+  }).then((res) => handle<Device>(res));
+}
+
+export function deleteDevice(id: number): Promise<void> {
+  return fetch(`/api/devices/${id}`, { method: "DELETE" }).then((res) => {
+    if (!res.ok) throw new Error(`request failed with status ${res.status}`);
+  });
 }

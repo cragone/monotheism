@@ -10,7 +10,8 @@ type Device struct {
 	ID                 uint       `gorm:"primaryKey" json:"id"`
 	UniqueID           string     `gorm:"uniqueIndex" json:"uniqueId"`
 	Name               string     `json:"name"`
-	Host               string     `json:"-"`
+	DeviceType         DeviceType `gorm:"column:device_type;not null;default:light" json:"deviceType"`
+	Host               string     `json:"host"`
 	SwitchID           int        `json:"-"`
 	SupportsBrightness bool       `json:"supportsBrightness"`
 	LastPowerState     string     `json:"lastPowerState"`
