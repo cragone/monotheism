@@ -17,9 +17,6 @@ func main() {
 	_ = godotenv.Load() // best-effort; production has no .env and relies on real env vars
 
 	cfg := config.Load()
-	if cfg.ShellyHost == "" {
-		log.Fatal("fatal: SHELLY_HOST is required")
-	}
 
 	gormDB, err := db.Open(cfg.DataDir)
 	if err != nil {
@@ -27,11 +24,14 @@ func main() {
 	}
 
 	shellyClient := shelly.NewClient()
-	device, err := shelly.Bootstrap(gormDB, shellyClient, cfg.ShellyHost, cfg.ShellyName)
-	if err != nil {
-		log.Fatalf("fatal: shelly bootstrap: %v", err)
+
+	if cfg.ShellyHost != "" {
+		device, err := shelly.Bootstrap(gormDB, shellyClient, cfg.ShellyHost, cfg.ShellyName)
+		if err != nil {
+			log.Fatalf("fatal: shelly bootstrap: %v", err)
+		}
+		log.Printf("info: shelly: registered %q (%s) at %s", device.Name, device.UniqueID, device.Host)
 	}
-	log.Printf("info: shelly: registered %q (%s) at %s", device.Name, device.UniqueID, device.Host)
 
 	go shelly.PollForever(gormDB, shellyClient)
 
@@ -40,7 +40,8 @@ func main() {
 		log.Fatalf("fatal: embed fs: %v", err)
 	}
 
-	engine := router.New(distFS, gormDB, shellyClient)
+	registrar := shelly.NewRegistrar(gormDB, shellyClient)
+	engine := router.New(distFS, gormDB, shellyClient, registrar)
 
 	log.Printf("info: vecna server listening on :%s", cfg.Port)
 	if err := engine.Run(":" + cfg.Port); err != nil {

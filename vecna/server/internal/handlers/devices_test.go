@@ -31,9 +31,27 @@ func (m *mockPublisher) SetBrightness(_ models.Device, level int) error {
 	return m.err
 }
 
+type registerCall struct {
+	host       string
+	name       string
+	deviceType models.DeviceType
+}
+
+type mockRegistrar struct {
+	device models.Device
+	err    error
+	calls  []registerCall
+}
+
+func (m *mockRegistrar) Register(host, name string, deviceType models.DeviceType) (models.Device, error) {
+	m.calls = append(m.calls, registerCall{host: host, name: name, deviceType: deviceType})
+	return m.device, m.err
+}
+
 type testFixture struct {
 	engine     *gin.Engine
 	publisher  *mockPublisher
+	registrar  *mockRegistrar
 	dimmableID uint
 	onOffID    uint
 }
@@ -47,23 +65,27 @@ func setup(t *testing.T) testFixture {
 		t.Fatalf("db.Open: %v", err)
 	}
 
-	dimmable := models.Device{UniqueID: "plug-dimmable", Name: "Dimmable", Host: "192.168.1.26", SupportsBrightness: true}
-	onOff := models.Device{UniqueID: "plug-onoff", Name: "OnOff", Host: "192.168.1.27", SupportsBrightness: false}
+	dimmable := models.Device{UniqueID: "plug-dimmable", Name: "Dimmable", Host: "192.168.1.26", DeviceType: models.DeviceTypeLight, SupportsBrightness: true}
+	onOff := models.Device{UniqueID: "plug-onoff", Name: "OnOff", Host: "192.168.1.27", DeviceType: models.DeviceTypeLight, SupportsBrightness: false}
 	seed(t, gormDB, &dimmable)
 	seed(t, gormDB, &onOff)
 
 	publisher := &mockPublisher{}
-	h := NewDeviceHandlers(gormDB, publisher)
+	registrar := &mockRegistrar{}
+	h := NewDeviceHandlers(gormDB, publisher, registrar)
 
 	engine := gin.New()
 	api := engine.Group("/api")
 	api.GET("/devices", h.List)
+	api.POST("/devices", h.Create)
 	api.GET("/devices/:id", h.Get)
 	api.PATCH("/devices/:id/name", h.Rename)
+	api.PATCH("/devices/:id/type", h.SetType)
 	api.POST("/devices/:id/power", h.SetPower)
 	api.POST("/devices/:id/brightness", h.SetBrightness)
+	api.DELETE("/devices/:id", h.Delete)
 
-	return testFixture{engine: engine, publisher: publisher, dimmableID: dimmable.ID, onOffID: onOff.ID}
+	return testFixture{engine: engine, publisher: publisher, registrar: registrar, dimmableID: dimmable.ID, onOffID: onOff.ID}
 }
 
 func seed(t *testing.T, gormDB *gorm.DB, d *models.Device) {
@@ -197,5 +219,105 @@ func TestListDevices(t *testing.T) {
 	}
 	if len(devices) != 2 {
 		t.Fatalf("expected 2 devices, got %d", len(devices))
+	}
+}
+
+func TestCreateDevice(t *testing.T) {
+	fx := setup(t)
+	fx.registrar.device = models.Device{ID: 99, UniqueID: "shellyplugusg4-e8f60a7ded4c", Name: "Sound Machine", Host: "192.168.1.210", DeviceType: models.DeviceTypeSoundMachine}
+
+	rec := doRequest(fx.engine, http.MethodPost, "/api/devices", createDeviceRequest{Host: "192.168.1.210", Name: "Sound Machine", DeviceType: models.DeviceTypeSoundMachine})
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if len(fx.registrar.calls) != 1 || fx.registrar.calls[0].host != "192.168.1.210" {
+		t.Fatalf("expected one Register call for the given host, got %+v", fx.registrar.calls)
+	}
+
+	var device models.Device
+	if err := json.Unmarshal(rec.Body.Bytes(), &device); err != nil {
+		t.Fatalf("unmarshal response: %v", err)
+	}
+	if device.Name != "Sound Machine" || device.DeviceType != models.DeviceTypeSoundMachine {
+		t.Fatalf("unexpected device in response: %+v", device)
+	}
+}
+
+func TestCreateDeviceUnreachableHost(t *testing.T) {
+	fx := setup(t)
+	fx.registrar.err = fmt.Errorf("register device: connect: connection refused")
+
+	rec := doRequest(fx.engine, http.MethodPost, "/api/devices", createDeviceRequest{Host: "192.168.1.250", Name: "Ghost", DeviceType: models.DeviceTypeLight})
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for unreachable host, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestCreateDeviceInvalidType(t *testing.T) {
+	fx := setup(t)
+
+	rec := doRequest(fx.engine, http.MethodPost, "/api/devices", map[string]string{"host": "192.168.1.210", "name": "Sound Machine", "deviceType": "toaster"})
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for invalid device type, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if len(fx.registrar.calls) != 0 {
+		t.Fatalf("expected no Register calls, got %+v", fx.registrar.calls)
+	}
+}
+
+func TestSetDeviceType(t *testing.T) {
+	fx := setup(t)
+
+	rec := doRequest(fx.engine, http.MethodPatch, fmt.Sprintf("/api/devices/%d/type", fx.onOffID), setTypeRequest{DeviceType: models.DeviceTypeGarage})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	var device models.Device
+	if err := json.Unmarshal(rec.Body.Bytes(), &device); err != nil {
+		t.Fatalf("unmarshal response: %v", err)
+	}
+	if device.DeviceType != models.DeviceTypeGarage {
+		t.Fatalf("expected device type %q, got %q", models.DeviceTypeGarage, device.DeviceType)
+	}
+
+	rec = doRequest(fx.engine, http.MethodGet, fmt.Sprintf("/api/devices/%d", fx.onOffID), nil)
+	if err := json.Unmarshal(rec.Body.Bytes(), &device); err != nil {
+		t.Fatalf("unmarshal response: %v", err)
+	}
+	if device.DeviceType != models.DeviceTypeGarage {
+		t.Fatalf("expected type change to persist, got %q", device.DeviceType)
+	}
+}
+
+func TestSetDeviceTypeInvalid(t *testing.T) {
+	fx := setup(t)
+
+	rec := doRequest(fx.engine, http.MethodPatch, fmt.Sprintf("/api/devices/%d/type", fx.onOffID), map[string]string{"deviceType": "toaster"})
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for invalid device type, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestDeleteDevice(t *testing.T) {
+	fx := setup(t)
+
+	rec := doRequest(fx.engine, http.MethodDelete, fmt.Sprintf("/api/devices/%d", fx.onOffID), nil)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("expected 204, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	rec = doRequest(fx.engine, http.MethodGet, fmt.Sprintf("/api/devices/%d", fx.onOffID), nil)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("expected 404 after delete, got %d", rec.Code)
+	}
+
+	rec = doRequest(fx.engine, http.MethodGet, "/api/devices", nil)
+	var devices []models.Device
+	if err := json.Unmarshal(rec.Body.Bytes(), &devices); err != nil {
+		t.Fatalf("unmarshal response: %v", err)
+	}
+	if len(devices) != 1 {
+		t.Fatalf("expected 1 device remaining, got %d", len(devices))
 	}
 }

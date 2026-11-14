@@ -1,8 +1,8 @@
 import { useRef, useState } from "react";
 import type { Device } from "../api/devices";
 import { renameDevice, setBrightness, setPower } from "../api/devices";
+import { emojiFor } from "../deviceTypes";
 import ConnectionBadge from "./ConnectionBadge";
-import LightbulbIcon from "./LightbulbIcon";
 
 const BRIGHTNESS_DEBOUNCE_MS = 150;
 
@@ -115,11 +115,11 @@ export default function DeviceCard({
             disabled={pending}
             aria-pressed={isOn}
             aria-label={isOn ? "Turn off" : "Turn on"}
-            className={`btn btn-circle btn-ghost ${
-              isOn ? "text-warning drop-shadow-[0_0_6px_var(--color-warning)]" : "text-base-content/40"
+            className={`btn btn-circle btn-ghost text-2xl transition-all ${
+              isOn ? "drop-shadow-[0_0_6px_var(--color-warning)]" : "grayscale opacity-40"
             }`}
           >
-            <LightbulbIcon on={isOn} className="size-7" />
+            <span aria-hidden="true">{emojiFor(device.deviceType)}</span>
           </button>
           <span className="text-sm opacity-70">{isOn ? "On" : "Off"}</span>
         </div>

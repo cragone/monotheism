@@ -1,3 +1,4 @@
+import { Link } from "react-router-dom";
 import type { Device } from "../api/devices";
 import DeviceCard from "./DeviceCard";
 
@@ -14,8 +15,12 @@ export default function DeviceList({
     return (
       <div className="alert alert-info">
         <span>
-          No devices yet — check that SHELLY_HOST points at the plug and
-          it's reachable on the LAN. See VECNA.md for setup steps.
+          No devices yet — add one from the{" "}
+          <Link to="/settings" className="link">
+            device settings page
+          </Link>
+          , or set SHELLY_HOST for a startup default. See VECNA.md for setup
+          steps.
         </span>
       </div>
     );

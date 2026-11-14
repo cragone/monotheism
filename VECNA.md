@@ -123,8 +123,16 @@ password into).
 
 ## Scope
 
-Single-plug MVP: on/off for one device, REST API polled by the frontend
-every ~2s (no WebSocket/SSE). No rooms, schedules, scenes, or dimming
-(Shelly plugs are on/off only). If more Shelly devices get added later, the
-existing schema already supports multiple rows — the UI would just need a
-grouping concept added, which is explicitly deferred for now.
+Multi-device, on/off only: any number of Shelly plugs, REST API polled by
+the frontend every ~2s (no WebSocket/SSE). No rooms, schedules, scenes, or
+dimming (Shelly plugs are on/off only).
+
+Each device has a `deviceType` (`light` / `sound_machine` / `garage` /
+`temp`) that changes only which emoji its toggle button shows on the main
+page (`/`) — control logic is identical across types. `SHELLY_HOST`/
+`SHELLY_NAME` still optionally seed one device at startup (for backward
+compatibility with existing deployments), but new devices are registered at
+runtime through the device management page at `/settings`: add a device by
+host + name + type (vecna confirms it's reachable and resolves its MAC the
+same way the startup bootstrap does), change an existing device's type, or
+remove one.
