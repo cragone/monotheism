@@ -1,0 +1,28 @@
+name: Production Deployment of control-panel (raspi5 kiosk)
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "control-panel/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    name: Trigger deploy webhook
+    runs-on: ubuntu-latest
+    environment: Production
+
+    steps:
+      # No SSH/runner on the raspi5: it's a home-LAN box reachable only
+      # through its Cloudflare Tunnel, which exposes a small token-gated
+      # webhook (see control-panel/scripts/hooks.json.example) that runs
+      # control-panel/scripts/deploy-local.sh on the host itself.
+      - name: Trigger control-panel deploy webhook
+        run: |
+          curl -sS --fail -X POST \
+            -H "X-Deploy-Token: ${{ secrets.CONTROL_PANEL_DEPLOY_TOKEN }}" \
+            https://deploy-control-panel.charlesragone.com/hooks/deploy-control-panel

@@ -1,0 +1,64 @@
+export struct ZoneTile {
+    zone_id: string,
+    name: string,
+    emoji: string,
+    on: bool,
+}
+
+export component MainWindow inherits Window {
+    width: 1024px;
+    height: 600px;
+    background: #111318;
+
+    in property <[ZoneTile]> zones;
+    in property <bool> connected: false;
+    callback toggle(string);
+
+    VerticalLayout {
+        padding: 32px;
+        spacing: 24px;
+
+        HorizontalLayout {
+            spacing: 24px;
+            for tile[i] in zones : Rectangle {
+                border-radius: 28px;
+                background: tile.on ? #ffd166 : #2b2f3a;
+
+                TouchArea {
+                    clicked => { toggle(tile.zone_id); }
+                }
+
+                VerticalLayout {
+                    alignment: center;
+                    spacing: 12px;
+                    Text {
+                        text: tile.emoji;
+                        font-size: 72px;
+                        horizontal-alignment: center;
+                    }
+                    Text {
+                        text: tile.name;
+                        font-size: 56px;
+                        font-weight: 700;
+                        color: tile.on ? #111318 : #e6e6e6;
+                        horizontal-alignment: center;
+                        wrap: word-wrap;
+                    }
+                    Text {
+                        text: tile.on ? "ON" : "OFF";
+                        font-size: 36px;
+                        color: tile.on ? #111318 : #8a8f99;
+                        horizontal-alignment: center;
+                    }
+                }
+            }
+        }
+
+        if !connected : Text {
+            text: "reconnecting…";
+            font-size: 20px;
+            color: #8a8f99;
+            horizontal-alignment: center;
+        }
+    }
+}

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Manual deploy to the raspi5's k3s cluster, for triggering a deploy by hand
+# Manual deploy to the raspi5 kiosk host, for triggering a deploy by hand
 # from your own machine. CI instead hits the deploy webhook (see
 # hooks.json.example + CONTROL-PANEL.md) so it never needs SSH access.
 #
