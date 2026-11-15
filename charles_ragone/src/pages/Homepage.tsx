@@ -34,6 +34,10 @@ const focusAreas: FocusArea[] = [
     title: "DevOps & infrastructure",
     desc: "Docker, Kubernetes (k3s), Traefik, NixOS, and CI/CD on Azure and AWS — end-to-end ownership from the database to the deploy.",
   },
+  {
+    title: "Self-hosting & home-lab",
+    desc: "Running my own home-lab server on NixOS — a single-node k3s cluster, Cloudflare Tunnels, and local-network IoT device control, no cloud dependency.",
+  },
 ];
 
 type Job = {
@@ -86,6 +90,9 @@ const experience: Job[] = [
       "Implemented Google and Okta authentication systems.",
       "Built and deployed production websites with Cloudflare TLS and GitHub Actions CI/CD.",
       "Contributed to the GORM open source project (go-gorm/gorm), a Go ORM library.",
+      "Self-host a home-lab server on NixOS, running a single-node k3s cluster exposed via Cloudflare Tunnels instead of open inbound ports.",
+      "Built vecna, a Go + React app that controls Shelly smart plugs entirely over the local network — no cloud bridge or broker in the loop.",
+      "Built and maintain super-argus, an open source self-hosted logging/metrics/alerting platform, deployed via its own NixOS module and ingesting logs from two Kubernetes clusters.",
     ],
   },
 ];
@@ -95,7 +102,7 @@ const skillGroups: { title: string; items: string[] }[] = [
   { title: "Data", items: ["PostgreSQL", "MySQL", "Raw SQL"] },
   {
     title: "Infrastructure & DevOps",
-    items: ["Docker", "Kubernetes (k3s)", "Traefik Ingress", "NixOS", "Azure", "AWS", "Infrastructure as Code", "GitHub Actions CI/CD"],
+    items: ["Docker", "Kubernetes (k3s)", "Traefik Ingress", "NixOS", "Nix flakes", "Self-hosting", "Cloudflare Tunnels", "Azure", "AWS", "Infrastructure as Code", "GitHub Actions CI/CD"],
   },
   { title: "Practices", items: ["Agile / Lean", "End-to-end system ownership", "Secure auth (Okta, Google)"] },
 ];
@@ -131,6 +138,18 @@ const studio: Work[] = [
     name: "Lorena",
     host: "lorena.charlesragone.com",
     note: "My wife, Lorena, and me on our wedding night, rendered in ASCII.",
+  },
+  {
+    no: "05",
+    name: "Vecna",
+    host: "vecna.charlesragone.com",
+    note: "Local house control — a Go + React app that turns Shelly smart plugs on and off over the LAN, no cloud in the loop.",
+  },
+  {
+    no: "06",
+    name: "Super-argus",
+    host: "github.com/cragone/super-argus",
+    note: "An open source, self-hosted logging, metrics, and alerting platform — deployed on my home server via its own NixOS module.",
   },
 ];
 
