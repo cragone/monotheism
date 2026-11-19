@@ -21,13 +21,27 @@ func New(host, apiToken string) *Client {
 	return &Client{
 		Host:     host,
 		APIToken: apiToken,
-		http:     &http.Client{Timeout: 5 * time.Second},
+		// The ESP32 is on WiFi with a middling, occasionally flaky RSSI
+		// (observed around -55 to -70dBm), and a full-size PCM body takes
+		// real time to transfer at that signal quality -- 5s was too tight
+		// and caused spurious failures that a plain retry resolves.
+		http: &http.Client{Timeout: 15 * time.Second},
 	}
 }
 
 // Speak POSTs raw PCM (mono, 16-bit signed little-endian, see piper.SampleRate)
-// to the device, which plays it immediately in MODE_SPEAK.
+// to the device, which plays it immediately in MODE_SPEAK. Retries once on
+// failure since a single dropped WiFi packet shouldn't fail the whole request.
 func (c *Client) Speak(ctx context.Context, pcm []byte) error {
+	err := c.speakOnce(ctx, pcm)
+	if err == nil {
+		return nil
+	}
+	time.Sleep(1 * time.Second)
+	return c.speakOnce(ctx, pcm)
+}
+
+func (c *Client) speakOnce(ctx context.Context, pcm []byte) error {
 	url := fmt.Sprintf("http://%s/speak", c.Host)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(pcm))
 	if err != nil {
