@@ -1,8 +1,3 @@
-export interface HistoryEntry {
-  text: string;
-  at: string;
-}
-
 async function handle<T>(res: Response): Promise<T> {
   if (!res.ok) {
     const body = await res.json().catch(() => ({ error: res.statusText }));
@@ -17,8 +12,4 @@ export function speak(text: string): Promise<{ ok: boolean }> {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ text }),
   }).then((res) => handle<{ ok: boolean }>(res));
-}
-
-export function listHistory(): Promise<HistoryEntry[]> {
-  return fetch("/api/history").then((res) => handle<HistoryEntry[]>(res));
 }

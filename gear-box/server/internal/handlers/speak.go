@@ -6,7 +6,6 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"github.com/cragone/lorena-teaches-brazilian/gear-box/server/internal/history"
 	"github.com/cragone/lorena-teaches-brazilian/gear-box/server/internal/piper"
 )
 
@@ -24,13 +23,12 @@ type Pusher interface {
 }
 
 type SpeakHandlers struct {
-	piper   Synthesizer
-	esp32   Pusher
-	history *history.Ring
+	piper Synthesizer
+	esp32 Pusher
 }
 
-func NewSpeakHandlers(synth Synthesizer, pusher Pusher, hist *history.Ring) *SpeakHandlers {
-	return &SpeakHandlers{piper: synth, esp32: pusher, history: hist}
+func NewSpeakHandlers(synth Synthesizer, pusher Pusher) *SpeakHandlers {
+	return &SpeakHandlers{piper: synth, esp32: pusher}
 }
 
 type speakRequest struct {
@@ -59,10 +57,5 @@ func (h *SpeakHandlers) Speak(c *gin.Context) {
 		return
 	}
 
-	h.history.Add(req.Text)
 	c.JSON(http.StatusOK, gin.H{"ok": true})
-}
-
-func (h *SpeakHandlers) History(c *gin.Context) {
-	c.JSON(http.StatusOK, h.history.List())
 }

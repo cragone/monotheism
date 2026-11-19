@@ -4,10 +4,10 @@
 # image is built and imported directly into that k3s node's containerd by
 # gear-box/scripts/deploy-local.sh, so no registry/imagePullSecrets needed.
 #
-# No PVC: unlike vecna, gear-box keeps no persistent state at all — its
-# "recently spoken" history is an in-memory ring buffer that's fine to lose
-# on restart — so the default RollingUpdate strategy is fine too (no
-# SQLite single-writer constraint forcing Recreate).
+# No PVC: gear-box keeps no persistent state at all — it doesn't even hold
+# spoken text in memory past the request that pushes it to the ESP32 — so
+# the default RollingUpdate strategy is fine too (no SQLite single-writer
+# constraint forcing Recreate).
 apiVersion: apps/v1
 kind: Deployment
 metadata:

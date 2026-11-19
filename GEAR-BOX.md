@@ -10,13 +10,13 @@ neural TTS) and pushes the finished audio over the LAN to an ESP32-S3
 gear-box owns the TTS engine; the ESP32 only ever receives. There's no
 device registry, no database, and no polling: the website posts text,
 gear-box runs Piper, and the resulting PCM gets POSTed straight to the
-ESP32's `/speak` endpoint. "Recently spoken" history is a small in-memory
-ring buffer — intentionally not persisted, since losing it on a restart is
-a fine trade for not needing a database or a PVC for this service. The
-ambient noise-machine modes already on the ESP32 (white/pink/brown/rain/
-ocean/fan/tone) and their power/volume controls are untouched and
-deliberately **not** exposed in gear-box's UI — reach them directly on the
-ESP32's own HTTP API on the LAN if you ever need to.
+ESP32's `/speak` endpoint. gear-box doesn't retain any record of what was
+spoken — no history, in memory or otherwise — the text is synthesized,
+pushed, and forgotten. The ambient noise-machine modes already on the
+ESP32 (white/pink/brown/rain/ocean/fan/tone) and their power/volume
+controls are exposed in gear-box's UI too, proxied through `/api/sound/*`
+(gear-box's server is the only thing with the ESP32's LAN address and
+optional API token, so the frontend never talks to the device directly).
 
 ## Hardware: the sound_machine ESP32
 
@@ -97,8 +97,15 @@ same ports).
 ## API
 
 - `POST /api/speak` — `{"text": "..."}` (max 200 chars). Synthesizes with
-  Piper, pushes the result to the ESP32, records it in history.
-- `GET /api/history` — the last 20 spoken lines, newest first.
+  Piper and pushes the result to the ESP32. Nothing about the text is
+  retained afterward.
+- `GET /api/sound/status` — the ESP32's current `{on, mode, volume}`.
+- `GET /api/sound/modes` — available ambient modes (excludes `speak`,
+  which is the device's own internal mode, not something to pick from a
+  menu).
+- `POST /api/sound/mode` — `{"name": "..."}`, one of the above.
+- `POST /api/sound/volume` — `{"level": 0.0-1.0}`.
+- `POST /api/sound/power` — `{"on": true|false}`.
 - `GET /api/health`
 
 ## Where things live

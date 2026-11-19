@@ -9,8 +9,6 @@ import (
 	"testing"
 
 	"github.com/gin-gonic/gin"
-
-	"github.com/cragone/lorena-teaches-brazilian/gear-box/server/internal/history"
 )
 
 type mockSynthesizer struct {
@@ -46,13 +44,11 @@ func setup(t *testing.T) testFixture {
 
 	synth := &mockSynthesizer{pcm: []byte{0x01, 0x02}}
 	pusher := &mockPusher{}
-	hist := history.NewRing(20)
-	h := NewSpeakHandlers(synth, pusher, hist)
+	h := NewSpeakHandlers(synth, pusher)
 
 	engine := gin.New()
 	api := engine.Group("/api")
 	api.POST("/speak", h.Speak)
-	api.GET("/history", h.History)
 
 	return testFixture{engine: engine, synth: synth, pusher: pusher}
 }
@@ -72,7 +68,7 @@ func doRequest(engine *gin.Engine, method, path string, body any) *httptest.Resp
 	return rec
 }
 
-func TestSpeakPushesToESP32AndRecordsHistory(t *testing.T) {
+func TestSpeakPushesToESP32(t *testing.T) {
 	fx := setup(t)
 
 	rec := doRequest(fx.engine, http.MethodPost, "/api/speak", speakRequest{Text: "hello"})
@@ -84,15 +80,6 @@ func TestSpeakPushesToESP32AndRecordsHistory(t *testing.T) {
 	}
 	if len(fx.pusher.pushed) != 1 {
 		t.Fatalf("expected one Speak push, got %d", len(fx.pusher.pushed))
-	}
-
-	rec = doRequest(fx.engine, http.MethodGet, "/api/history", nil)
-	var entries []history.Entry
-	if err := json.Unmarshal(rec.Body.Bytes(), &entries); err != nil {
-		t.Fatalf("unmarshal response: %v", err)
-	}
-	if len(entries) != 1 || entries[0].Text != "hello" {
-		t.Fatalf("expected history to contain \"hello\", got %+v", entries)
 	}
 }
 

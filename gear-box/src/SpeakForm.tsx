@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { speak } from "./api/speak";
 
-export default function SpeakForm({ onSpoken }: { onSpoken: () => void }) {
+export default function SpeakForm() {
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -16,7 +16,6 @@ export default function SpeakForm({ onSpoken }: { onSpoken: () => void }) {
     try {
       await speak(trimmed);
       setText("");
-      onSpoken();
     } catch (err) {
       setError(err instanceof Error ? err.message : "failed to speak");
     } finally {
