@@ -204,10 +204,14 @@ int parseModeName(const String &name) {
   return -1;
 }
 
-bool checkAuth() {
+bool isAuthorized() {
   if (strlen(API_TOKEN) == 0) return true;
   String token = server.hasArg("token") ? server.arg("token") : server.header("X-Token");
-  if (token == API_TOKEN) return true;
+  return token == API_TOKEN;
+}
+
+bool checkAuth() {
+  if (isAuthorized()) return true;
   server.send(401, "application/json", "{\"error\":\"unauthorized\"}");
   return false;
 }
@@ -283,48 +287,86 @@ void handleVolume() {
 // 16-bit signed little-endian, 22050Hz, no WAV header, no length prefix
 // beyond the HTTP Content-Length header itself. This device no longer
 // fetches anything; it only ever receives.
-void handleSpeakPost() {
-  if (!checkAuth()) return;
+//
+// WebServer's plain-body path (server.arg("plain")) is not usable here: it
+// buffers the whole body through a C-string (String(plainBuf)), which
+// truncates at the first zero byte — and raw 16-bit PCM is full of zero
+// bytes. The raw-body callback mechanism below (registered as the upload
+// function in server.on(), delivered via server.raw()) is what this core's
+// WebServer actually uses to hand a non-form POST body to a sketch without
+// a String round-trip.
+int16_t *pendingSpeakBuf = nullptr;
+size_t pendingSpeakCap = 0;
+size_t pendingSpeakOffset = 0;
+bool pendingSpeakAuthorized = false;
+bool pendingSpeakOk = false;
 
-  if (!server.hasHeader("Content-Length")) {
-    server.send(411, "application/json", "{\"error\":\"length required\"}");
-    return;
-  }
-  size_t contentLen = server.header("Content-Length").toInt();
-  if (contentLen == 0 || contentLen > SPEAK_MAX_BYTES) {
-    server.send(413, "application/json", "{\"error\":\"body too large\"}");
-    return;
-  }
-
-  int16_t *newBuf = (int16_t *)malloc(contentLen);
-  if (!newBuf) {
-    server.send(500, "application/json", "{\"error\":\"oom\"}");
-    return;
-  }
-
-  WiFiClient client = server.client();
-  size_t got = 0;
-  uint8_t *dst = (uint8_t *)newBuf;
-  unsigned long deadline = millis() + 5000;
-  while (got < contentLen && millis() < deadline) {
-    if (client.available()) {
-      int n = client.read(dst + got, contentLen - got);
-      if (n > 0) {
-        got += n;
-        deadline = millis() + 5000;
+void handleSpeakRaw() {
+  HTTPRaw &raw = server.raw();
+  switch (raw.status) {
+    case RAW_START: {
+      pendingSpeakOk = false;
+      pendingSpeakOffset = 0;
+      if (pendingSpeakBuf) {
+        free(pendingSpeakBuf);
+        pendingSpeakBuf = nullptr;
       }
-    }
-  }
+      // Headers (and any ?token= query arg) are already fully parsed by the
+      // time RAW_START fires, so this check still runs before any body
+      // bytes are retained.
+      pendingSpeakAuthorized = isAuthorized();
+      if (!pendingSpeakAuthorized) break;
 
-  if (got != contentLen) {
-    free(newBuf);
-    server.send(400, "application/json", "{\"error\":\"short read\"}");
+      int contentLen = server.clientContentLength();
+      if (contentLen <= 0 || (size_t)contentLen > SPEAK_MAX_BYTES) break;
+
+      pendingSpeakBuf = (int16_t *)malloc((size_t)contentLen);
+      if (!pendingSpeakBuf) break;
+      pendingSpeakCap = (size_t)contentLen;
+      pendingSpeakOk = true;
+      break;
+    }
+
+    case RAW_WRITE: {
+      if (!pendingSpeakOk) break;
+      if (pendingSpeakOffset + raw.currentSize > pendingSpeakCap) {
+        pendingSpeakOk = false;
+        break;
+      }
+      memcpy((uint8_t *)pendingSpeakBuf + pendingSpeakOffset, raw.buf, raw.currentSize);
+      pendingSpeakOffset += raw.currentSize;
+      break;
+    }
+
+    case RAW_END:
+    case RAW_ABORTED:
+    default:
+      break; // finalized in handleSpeakPost, which runs right after this
+  }
+}
+
+void handleSpeakPost() {
+  if (!pendingSpeakAuthorized) {
+    server.send(401, "application/json", "{\"error\":\"unauthorized\"}");
+    if (pendingSpeakBuf) {
+      free(pendingSpeakBuf);
+      pendingSpeakBuf = nullptr;
+    }
+    return;
+  }
+  if (!pendingSpeakOk || !pendingSpeakBuf) {
+    server.send(400, "application/json", "{\"error\":\"bad or missing body\"}");
+    if (pendingSpeakBuf) {
+      free(pendingSpeakBuf);
+      pendingSpeakBuf = nullptr;
+    }
     return;
   }
 
   if (speakBuf) free(speakBuf);
-  speakBuf = newBuf;
-  speakLen = got / 2;
+  speakBuf = pendingSpeakBuf;
+  speakLen = pendingSpeakOffset / 2;
+  pendingSpeakBuf = nullptr;
   currentMode = MODE_SPEAK;
   server.send(200, "application/json", buildStatusJson());
 }
@@ -402,7 +444,7 @@ void setup() {
   server.on("/mode", HTTP_ANY, handleMode);
   server.on("/volume", HTTP_ANY, handleVolume);
   server.on("/modes", HTTP_ANY, handleModes);
-  server.on("/speak", HTTP_POST, handleSpeakPost);
+  server.on("/speak", HTTP_POST, handleSpeakPost, handleSpeakRaw);
   server.on("/speak", HTTP_GET, handleSpeakGetNotAllowed);
   server.onNotFound(handleNotFound);
   server.begin();
