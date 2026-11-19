@@ -30,6 +30,7 @@ go.work.sum
 # real deploy-webhook secret lives only on the bw-server host; see
 # vecna/scripts/hooks.json.example
 vecna/scripts/hooks.json
+gear-box/scripts/hooks.json
 
 # Editor/IDE
 # .idea/

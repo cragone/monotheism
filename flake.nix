@@ -104,6 +104,31 @@
             npm run dev -- --port 5176 --strictPort
           '';
 
+          # gear-box's TTS API + client, same two-process dev split as
+          # vecna/charles-ragone. Pushes synthesized audio straight to the
+          # sound_machine ESP32 over the LAN — the ESP32 is a physical
+          # device, not something that can be mocked, so ESP32_HOST must
+          # point at the real one. See GEAR-BOX.md.
+          runGearbox = pkgs.writeShellScriptBin "run-gearbox" ''
+            set -euo pipefail
+            root="$(git rev-parse --show-toplevel)/gear-box"
+            [ -d "$root/node_modules" ] || (cd "$root" && npm install)
+
+            (
+              cd "$root/server"
+              export PORT="''${PORT:-8083}"
+              export ESP32_HOST="''${ESP32_HOST:-soundmachine.local}"
+              echo "==> gear-box API on http://localhost:$PORT (talking to ESP32 at $ESP32_HOST)"
+              go run ./cmd/server
+            ) &
+            api_pid=$!
+            trap 'kill "$api_pid" 2>/dev/null || true' EXIT
+
+            cd "$root"
+            echo "==> gear-box frontend on http://localhost:5177 (proxying /api -> http://localhost:''${PORT:-8083})"
+            npm run dev -- --port 5177 --strictPort
+          '';
+
           # The evo game: three Rust services (cell/land server, tribal server, and the
           # wasm client). Ports are fixed, not configurable, because client/Trunk.toml
           # hardcodes proxy targets at 4000 (server) and 4200 (tribe).
@@ -146,6 +171,7 @@
               pkgs.pkg-config
               pkgs.sqlite
               pkgs.git
+              pkgs.piper-tts
 
               # evo (Rust + wasm): cargo/rustc from nixpkgs already bundle wasm32-unknown-unknown
               # std, lld is needed to link it, and trunk fetches its own matching wasm-bindgen
@@ -160,6 +186,7 @@
               runCharlesragone
               runEileen
               runVecna
+              runGearbox
               runEvo
             ];
 
@@ -170,6 +197,7 @@
               echo "  run-charlesragone  -> charles API + client  (http://localhost:8080 / :5174)"
               echo "  run-eileen         -> eileen (biology) site (http://localhost:5175)"
               echo "  run-vecna          -> vecna API + client    (http://localhost:8082 / :5176)"
+              echo "  run-gearbox        -> gear-box API + client (http://localhost:8083 / :5177)"
               echo "  run-evo            -> evo server + tribe + client (http://localhost:8080 / :4000 / :4200)"
             '';
           };
