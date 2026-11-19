@@ -1,0 +1,30 @@
+name: Production Deployment of gear-box.charlesragone.com
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "gear-box/**"
+      - "kubernetes/gear-box-production.yaml"
+      - "kubernetes/gear-box-ingress.yaml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    name: Trigger deploy webhook
+    runs-on: ubuntu-latest
+    environment: Production
+
+    steps:
+      # No SSH/runner on the bw-server: it's a home-LAN box reachable only
+      # through its Cloudflare Tunnel, which exposes a small token-gated
+      # webhook (see gear-box/scripts/hooks.json.example) that runs
+      # gear-box/scripts/deploy-local.sh on the host itself.
+      - name: Trigger gear-box deploy webhook
+        run: |
+          curl -sS --fail -X POST \
+            -H "X-Deploy-Token: ${{ secrets.GEAR_BOX_DEPLOY_TOKEN }}" \
+            https://deploy-gear-box.charlesragone.com/hooks/deploy-gear-box

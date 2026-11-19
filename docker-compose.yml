@@ -45,6 +45,16 @@ services:
     volumes:
       - vecna-data:/data
 
+  gear-box:
+    build:
+      context: ./gear-box
+      dockerfile: dockerfile
+    ports:
+      - "8083:80"
+    environment:
+      - PORT=80
+      - ESP32_HOST=${ESP32_HOST:-soundmachine.local}
+
 volumes:
   lorena-data:
   charles-ragone-data:

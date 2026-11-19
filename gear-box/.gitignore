@@ -1,0 +1,24 @@
+# Logs
+logs
+*.log
+npm-debug.log*
+
+# Frontend build output / deps (NOT server/web/dist, which holds the
+# committed placeholder the Go binary embeds until a real build overwrites
+# it — see server/web/embed.go)
+/node_modules
+/dist
+/dist-ssr
+*.local
+.vite/
+
+# Piper voice models — fetched by hand for local dev (see GEAR-BOX.md) or
+# at Docker build time (see dockerfile); binary model weights don't belong
+# in git history.
+/models/
+
+# Editor directories and files
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store

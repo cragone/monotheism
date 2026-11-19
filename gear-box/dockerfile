@@ -1,0 +1,62 @@
+FROM node:20-alpine AS frontend-build
+WORKDIR /app
+COPY package*.json ./
+RUN npm install
+COPY . .
+RUN npm run build
+
+FROM golang:1.26-alpine AS server-build
+WORKDIR /app
+COPY server/go.mod server/go.sum ./
+RUN go mod download
+COPY server/ .
+COPY --from=frontend-build /app/dist ./web/dist
+RUN CGO_ENABLED=0 GOOS=linux go build -o /gear-box-server ./cmd/server
+
+# Piper's official releases ship a statically-linked binary (plus its
+# bundled espeak-ng-data for phonemization), which sidesteps libc/package
+# availability questions on the final alpine base entirely. The voice model
+# is fetched here too rather than committed to git (binary model weights
+# don't belong in repo history) — both land in the image at build time, not
+# at container start, so the running service has no runtime dependency on
+# anything outside the image. deploy-local.sh already does a full local
+# `docker build` on every deploy, so this costs nothing extra per deploy.
+FROM alpine:3.20 AS piper-fetch
+ARG PIPER_VERSION=2023.11.14-2
+ARG TARGETARCH
+# Voice selection, broken into its path components as the piper-voices
+# HuggingFace repo lays them out: <LANG>/<LANG_REGION>/<NAME>/<QUALITY>/.
+# Verify this URL shape still matches at implementation time (confirm by
+# fetching once by hand) before relying on it in CI.
+ARG VOICE_LANG=en
+ARG VOICE_LANG_REGION=en_US
+ARG VOICE_NAME=lessac
+ARG VOICE_QUALITY=medium
+RUN apk add --no-cache curl tar && \
+    case "$TARGETARCH" in \
+      amd64) PIPER_ARCH="x86_64" ;; \
+      arm64) PIPER_ARCH="aarch64" ;; \
+      *) echo "unsupported TARGETARCH: $TARGETARCH" >&2; exit 1 ;; \
+    esac && \
+    curl -sSL -o /tmp/piper.tar.gz \
+      "https://github.com/rhasspy/piper/releases/download/${PIPER_VERSION}/piper_linux_${PIPER_ARCH}.tar.gz" && \
+    tar -xzf /tmp/piper.tar.gz -C /opt && \
+    mv /opt/piper /opt/piper-install && \
+    mkdir -p /opt/models && \
+    VOICE="${VOICE_LANG_REGION}-${VOICE_NAME}-${VOICE_QUALITY}" && \
+    VOICE_BASE="https://huggingface.co/rhasspy/piper-voices/resolve/main/${VOICE_LANG}/${VOICE_LANG_REGION}/${VOICE_NAME}/${VOICE_QUALITY}" && \
+    curl -sSL -o /opt/models/voice.onnx "${VOICE_BASE}/${VOICE}.onnx" && \
+    curl -sSL -o /opt/models/voice.onnx.json "${VOICE_BASE}/${VOICE}.onnx.json"
+
+FROM alpine:3.20
+RUN apk add --no-cache libstdc++
+COPY --from=piper-fetch /opt/piper-install /opt/piper
+ENV PATH="/opt/piper:${PATH}"
+
+COPY --from=piper-fetch /opt/models/ /models/
+ENV PIPER_MODEL_PATH=/models/voice.onnx
+
+COPY --from=server-build /gear-box-server /gear-box-server
+
+EXPOSE 80
+ENTRYPOINT ["/gear-box-server"]

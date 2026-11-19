@@ -1,0 +1,26 @@
+# BasicAuth-protected Traefik route for gear-box.charlesragone.com, reached
+# via the same Cloudflare Tunnel on the bw-server host as vecna (see
+# GEAR-BOX.md and VECNA.md). Deliberately reuses vecna's existing
+# vecna-basic-auth Middleware/Secret by name rather than creating a new one
+# — one set of credentials unlocks both home-LAN control apps. See
+# kubernetes/vecna-ingress.yaml for how that Secret is created on the host.
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: gear-box-web
+  namespace: default
+spec:
+  # "web" (plain HTTP, :80), not "websecure": the Cloudflare Tunnel terminates
+  # TLS at Cloudflare's edge and talks to this node over loopback-only HTTP,
+  # so Traefik needs no cert of its own here — same as vecna's route.
+  entryPoints:
+    - web
+  routes:
+    - match: Host(`gear-box.charlesragone.com`)
+      kind: Rule
+      priority: 10
+      middlewares:
+        - name: vecna-basic-auth
+      services:
+        - name: prod-gear-box-service
+          port: 80

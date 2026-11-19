@@ -1,0 +1,68 @@
+# Applied to the single-node k3s cluster running on the bw-server home-LAN
+# host itself (see GEAR-BOX.md and VECNA.md) — not the main cloud cluster,
+# which has no reachability to the sound_machine ESP32 on the home LAN. The
+# image is built and imported directly into that k3s node's containerd by
+# gear-box/scripts/deploy-local.sh, so no registry/imagePullSecrets needed.
+#
+# No PVC: unlike vecna, gear-box keeps no persistent state at all — its
+# "recently spoken" history is an in-memory ring buffer that's fine to lose
+# on restart — so the default RollingUpdate strategy is fine too (no
+# SQLite single-writer constraint forcing Recreate).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: prod-gear-box
+  namespace: default
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: prod-gear-box
+  template:
+    metadata:
+      labels:
+        app: prod-gear-box
+    spec:
+      containers:
+        - name: prod-gear-box
+          image: placeholder # replaced by deploy-bw-server.sh via kubectl set image
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 80
+          env:
+            - name: PORT
+              value: "80"
+            - name: ESP32_HOST
+              # A static LAN IP (DHCP-reserved, see GEAR-BOX.md), not
+              # soundmachine.local — mDNS reaching pod-land through k3s's
+              # network namespace is an extra moving part not worth
+              # debugging when a fixed IP works unconditionally.
+              value: 192.168.1.XX
+          readinessProbe:
+            httpGet:
+              path: /api/health
+              port: 80
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /api/health
+              port: 80
+            initialDelaySeconds: 15
+            periodSeconds: 20
+            failureThreshold: 3
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: prod-gear-box-service
+  namespace: default
+spec:
+  selector:
+    app: prod-gear-box
+  ports:
+    - protocol: TCP
+      port: 80
+      targetPort: 80
+  type: ClusterIP
