@@ -21,11 +21,14 @@ func New(host, apiToken string) *Client {
 	return &Client{
 		Host:     host,
 		APIToken: apiToken,
-		// The ESP32 is on WiFi with a middling, occasionally flaky RSSI
-		// (observed around -55 to -70dBm), and a full-size PCM body takes
-		// real time to transfer at that signal quality -- 5s was too tight
-		// and caused spurious failures that a plain retry resolves.
-		http: &http.Client{Timeout: 15 * time.Second},
+		// The firmware streams the body into a small ring buffer paced to
+		// real-time playback (not transferred as fast as the network
+		// allows), so request duration scales with the clip's length, up
+		// to MaxTextChars worth of speech (~12-15s) -- plus the ESP32's
+		// WiFi signal is middling and occasionally flaky (observed RSSI
+		// around -55 to -70dBm). 30s covers a near-cap-length clip with
+		// margin; a plain retry covers a single dropped connection.
+		http: &http.Client{Timeout: 30 * time.Second},
 	}
 }
 

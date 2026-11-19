@@ -20,14 +20,31 @@
 enum Mode { MODE_WHITE = 0, MODE_PINK, MODE_BROWN, MODE_RAIN, MODE_OCEAN, MODE_FAN, MODE_TONE, MODE_SPEAK, MODE_COUNT };
 static const char *MODE_NAMES[MODE_COUNT] = { "white", "pink", "brown", "rain", "ocean", "fan", "tone", "speak" };
 
-#define SPEAK_MAX_BYTES 260000 // cap to stay within available heap
+// Speech audio is streamed into a small, fixed-size ring buffer as it
+// arrives over HTTP and drained by audioTask in real time -- it is never
+// buffered whole. An earlier malloc-the-whole-clip design ran into this
+// chip's real-world heap fragmentation hard: ESP.getMaxAllocHeap() dropped
+// to well under 100KB after only a few requests regardless of how it was
+// sequenced, making anything beyond a couple of seconds of speech
+// unreliable. A small *static* ring (never resized, never fragments)
+// sidesteps the problem for clips of any length.
+#define SPEAK_RING_BYTES 16384 // ~370ms of buffering at 22050Hz, 16-bit
+#define SPEAK_MAX_BYTES 882000 // sanity/DoS cap only (20s of audio) -- not a buffer size
+
+static uint8_t speakRing[SPEAK_RING_BYTES];
+volatile size_t speakRingHead = 0; // next index the network (producer) writes
+volatile size_t speakRingTail = 0; // next index audioTask (consumer) reads
+volatile bool speakStreamAuthorized = false;
+volatile size_t speakStreamReceived = 0;
 
 volatile bool isOn = true;
 volatile int currentMode = MODE_WHITE;
 volatile float currentVolume = 0.3f;
 
-int16_t *speakBuf = nullptr;
-size_t speakLen = 0;
+static inline size_t speakRingFree() {
+  size_t used = (speakRingHead - speakRingTail + SPEAK_RING_BYTES) % SPEAK_RING_BYTES;
+  return SPEAK_RING_BYTES - 1 - used; // one slot always kept empty to tell full apart from empty
+}
 
 I2SClass i2s;
 WebServer server(80);
@@ -53,7 +70,6 @@ struct GenState {
   float oceanBrown, oceanPhase;
   float fanLP, fanHumPhase;
   float tonePhase;
-  size_t speakIndex;
 };
 static GenState gs;
 
@@ -135,10 +151,14 @@ float generateSample(Mode mode) {
     }
 
     case MODE_SPEAK: {
-      if (!speakBuf || gs.speakIndex >= speakLen) return 0.0f;
-      float sample = speakBuf[gs.speakIndex] / 32768.0f;
-      gs.speakIndex++;
-      return sample;
+      if (speakRingTail == speakRingHead) return 0.0f; // nothing buffered yet, or underrun
+      uint8_t lo = speakRing[speakRingTail];
+      speakRingTail = (speakRingTail + 1) % SPEAK_RING_BYTES;
+      if (speakRingTail == speakRingHead) return 0.0f; // odd byte stranded at a chunk boundary
+      uint8_t hi = speakRing[speakRingTail];
+      speakRingTail = (speakRingTail + 1) % SPEAK_RING_BYTES;
+      int16_t sample = (int16_t)((hi << 8) | lo); // little-endian
+      return sample / 32768.0f;
     }
 
     default:
@@ -217,15 +237,18 @@ bool checkAuth() {
 }
 
 String buildStatusJson() {
-  char buf[256];
+  char buf[320];
   snprintf(buf, sizeof(buf),
-           "{\"on\":%s,\"mode\":\"%s\",\"volume\":%.2f,\"ip\":\"%s\",\"rssi\":%d,\"uptime_s\":%lu}",
+           "{\"on\":%s,\"mode\":\"%s\",\"volume\":%.2f,\"ip\":\"%s\",\"rssi\":%d,\"uptime_s\":%lu,"
+           "\"free_heap\":%u,\"max_alloc_heap\":%u}",
            isOn ? "true" : "false",
            MODE_NAMES[currentMode],
            currentVolume,
            WiFi.localIP().toString().c_str(),
            (int)WiFi.RSSI(),
-           (unsigned long)(millis() / 1000));
+           (unsigned long)(millis() / 1000),
+           (unsigned)ESP.getFreeHeap(),
+           (unsigned)ESP.getMaxAllocHeap());
   return String(buf);
 }
 
@@ -295,79 +318,63 @@ void handleVolume() {
 // function in server.on(), delivered via server.raw()) is what this core's
 // WebServer actually uses to hand a non-form POST body to a sketch without
 // a String round-trip.
-int16_t *pendingSpeakBuf = nullptr;
-size_t pendingSpeakCap = 0;
-size_t pendingSpeakOffset = 0;
-bool pendingSpeakAuthorized = false;
-bool pendingSpeakOk = false;
-
+//
+// The body is streamed straight into speakRing as it arrives rather than
+// buffered whole: an earlier malloc-one-big-buffer design hit this chip's
+// real-world heap fragmentation hard (max contiguous allocation fell under
+// 100KB after only a handful of requests, however carefully the old and
+// new buffers were sequenced), making more than a couple of seconds of
+// speech unreliable. Streaming into a small static ring removes that
+// class of failure entirely, for a clip of any length.
 void handleSpeakRaw() {
   HTTPRaw &raw = server.raw();
   switch (raw.status) {
     case RAW_START: {
-      pendingSpeakOk = false;
-      pendingSpeakOffset = 0;
-      if (pendingSpeakBuf) {
-        free(pendingSpeakBuf);
-        pendingSpeakBuf = nullptr;
-      }
+      speakStreamReceived = 0;
       // Headers (and any ?token= query arg) are already fully parsed by the
       // time RAW_START fires, so this check still runs before any body
-      // bytes are retained.
-      pendingSpeakAuthorized = isAuthorized();
-      if (!pendingSpeakAuthorized) break;
+      // bytes are retained or played.
+      speakStreamAuthorized = isAuthorized();
+      if (!speakStreamAuthorized) break;
 
-      int contentLen = server.clientContentLength();
-      if (contentLen <= 0 || (size_t)contentLen > SPEAK_MAX_BYTES) break;
-
-      pendingSpeakBuf = (int16_t *)malloc((size_t)contentLen);
-      if (!pendingSpeakBuf) break;
-      pendingSpeakCap = (size_t)contentLen;
-      pendingSpeakOk = true;
+      speakRingHead = 0;
+      speakRingTail = 0;
+      currentMode = MODE_SPEAK; // start draining as bytes arrive, not after the whole clip lands
       break;
     }
 
     case RAW_WRITE: {
-      if (!pendingSpeakOk) break;
-      if (pendingSpeakOffset + raw.currentSize > pendingSpeakCap) {
-        pendingSpeakOk = false;
-        break;
+      if (!speakStreamAuthorized) break;
+      if (speakStreamReceived >= SPEAK_MAX_BYTES) break; // sanity cap hit; drop the rest silently
+
+      for (size_t i = 0; i < raw.currentSize; i++) {
+        unsigned long waitStart = millis();
+        while (speakRingFree() == 0) {
+          // audioTask (the other core) is draining in real time, so this
+          // only blocks when the network is delivering faster than
+          // playback consumes -- expected and brief, not a stall.
+          if (millis() - waitStart > 2000) return; // consumer wedged; bail on this chunk
+          delay(1);
+        }
+        speakRing[speakRingHead] = raw.buf[i];
+        speakRingHead = (speakRingHead + 1) % SPEAK_RING_BYTES;
       }
-      memcpy((uint8_t *)pendingSpeakBuf + pendingSpeakOffset, raw.buf, raw.currentSize);
-      pendingSpeakOffset += raw.currentSize;
+      speakStreamReceived += raw.currentSize;
       break;
     }
 
     case RAW_END:
     case RAW_ABORTED:
     default:
-      break; // finalized in handleSpeakPost, which runs right after this
+      break; // response sent from handleSpeakPost, which runs right after this
   }
 }
 
 void handleSpeakPost() {
-  if (!pendingSpeakAuthorized) {
+  if (!speakStreamAuthorized) {
     server.send(401, "application/json", "{\"error\":\"unauthorized\"}");
-    if (pendingSpeakBuf) {
-      free(pendingSpeakBuf);
-      pendingSpeakBuf = nullptr;
-    }
     return;
   }
-  if (!pendingSpeakOk || !pendingSpeakBuf) {
-    server.send(400, "application/json", "{\"error\":\"bad or missing body\"}");
-    if (pendingSpeakBuf) {
-      free(pendingSpeakBuf);
-      pendingSpeakBuf = nullptr;
-    }
-    return;
-  }
-
-  if (speakBuf) free(speakBuf);
-  speakBuf = pendingSpeakBuf;
-  speakLen = pendingSpeakOffset / 2;
-  pendingSpeakBuf = nullptr;
-  currentMode = MODE_SPEAK;
   server.send(200, "application/json", buildStatusJson());
 }
 

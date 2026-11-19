@@ -47,16 +47,31 @@ gear-box is the only thing that ever calls this. Body is **raw PCM: mono,
 beyond the HTTP `Content-Length` header itself**. A GET to the same path
 returns 405. This must stay in sync with `piper.SampleRate`/
 `piper.MaxOutputBytes` in `gear-box/server/internal/piper/piper.go` and
-`SPEAK_MAX_BYTES` in the firmware — it's the one seam between two
-independently-deployed pieces of code.
+`SPEAK_MAX_BYTES`/`SPEAK_RING_BYTES` in the firmware — it's the one seam
+between two independently-deployed pieces of code.
 
-The firmware's body-read path (`gear-box/firmware/sound_machine/sound_machine.ino`,
-`handleSpeakPost`) reads the request directly off the socket rather than
-through `WebServer`'s `server.arg("plain")`, to avoid buffering a ~260KB
-body into an Arduino `String` on a device already tight on heap. **This has
-not been verified against the installed `esp32:esp32` Arduino core's exact
-`WebServer` body-handling behavior — confirm by flashing and testing with
-`curl` (see Verification below) before trusting it in production.**
+The firmware **streams** the body into a small fixed-size ring buffer
+(`speakRing`, 16KB, static — never resized) as it arrives, via `WebServer`'s
+raw-body callback mechanism (`handleSpeakRaw`, registered as the upload
+function in `server.on()`), rather than buffering a whole clip in one
+`malloc`. Two things ruled out the more obvious approaches, both found by
+testing against the real device:
+- `server.arg("plain")` buffers the body through a C-string
+  (`String(plainBuf)`), which truncates at the first zero byte — and raw
+  16-bit PCM is full of zero bytes.
+- A single `malloc`'d buffer per clip (even freeing the previous one before
+  allocating the next) ran into real heap fragmentation on this chip: a
+  handful of requests dropped `ESP.getMaxAllocHeap()` to well under 100KB
+  regardless of allocation order, making more than a couple of seconds of
+  speech unreliable. A small *static* ring sidesteps this for
+  clips of any length, since nothing is ever allocated from the heap for
+  this feature at all — confirmed by pushing clips up to 650KB with a flat,
+  stable `free_heap`/`max_alloc_heap` across repeated varied-size requests
+  (`/status` reports both fields for exactly this kind of check).
+- Streaming also means request duration now scales with the clip's length
+  (paced to real-time playback, not transferred as fast as the network
+  allows) — `esp32.Client`'s 30s timeout accounts for a near-`MaxTextChars`
+  clip.
 
 ## Local dev (no Docker)
 

@@ -22,8 +22,12 @@ const (
 	// instead of after an expensive synthesis call.
 	MaxTextChars = 200
 
-	// MaxOutputBytes mirrors the firmware's SPEAK_MAX_BYTES buffer ceiling.
-	MaxOutputBytes = 260000
+	// MaxOutputBytes mirrors the firmware's SPEAK_MAX_BYTES -- a sanity/DoS
+	// cap (20s of audio), not a memory-allocation limit: the firmware
+	// streams speech into a small fixed-size ring buffer as it arrives
+	// rather than buffering a whole clip, so this is no longer bounded by
+	// device heap fragmentation the way it originally was.
+	MaxOutputBytes = 882000
 )
 
 // Synthesizer runs the Piper CLI as a subprocess to turn text into raw PCM.
