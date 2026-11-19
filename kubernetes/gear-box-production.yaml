@@ -37,7 +37,7 @@ spec:
               # soundmachine.local — mDNS reaching pod-land through k3s's
               # network namespace is an extra moving part not worth
               # debugging when a fixed IP works unconditionally.
-              value: 192.168.1.XX
+              value: 192.168.1.19
           readinessProbe:
             httpGet:
               path: /api/health

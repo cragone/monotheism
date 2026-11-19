@@ -8,8 +8,13 @@ import (
 )
 
 const (
-	// SampleRate must match the ESP32 firmware's fixed I2S playback rate
-	// (see gear-box/firmware/sound_machine/sound_machine.ino, SAMPLE_RATE).
+	// SampleRate documents the rate the configured voice model must produce
+	// to match the ESP32 firmware's fixed I2S playback rate (see
+	// gear-box/firmware/sound_machine/sound_machine.ino, SAMPLE_RATE). Piper
+	// has no CLI flag to resample output -- the rate comes entirely from the
+	// chosen voice model's own config (its .onnx.json "sample_rate" field),
+	// so this constant is a deployment contract to verify when swapping
+	// voices, not something passed to the piper invocation.
 	SampleRate = 22050
 
 	// MaxTextChars mirrors the firmware's own text-length cap from its old
@@ -39,8 +44,7 @@ func (s *Synthesizer) Synthesize(ctx context.Context, text string) ([]byte, erro
 
 	cmd := exec.CommandContext(ctx, s.Binary,
 		"--model", s.ModelPath,
-		"--output-raw",
-		"--sample_rate", fmt.Sprintf("%d", SampleRate),
+		"--output_raw",
 	)
 	cmd.Stdin = bytes.NewReader([]byte(text))
 
