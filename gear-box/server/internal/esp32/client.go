@@ -3,10 +3,8 @@ package esp32
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
 	"net/http"
-	"net/url"
 	"time"
 )
 
@@ -35,8 +33,8 @@ func New(host, apiToken string) *Client {
 }
 
 // Speak POSTs raw PCM (mono, 16-bit signed little-endian, see piper.SampleRate)
-// to the device, which plays it immediately in MODE_SPEAK. Retries once on
-// failure since a single dropped WiFi packet shouldn't fail the whole request.
+// to the device, which plays it immediately. Retries once on failure since a
+// single dropped WiFi packet shouldn't fail the whole request.
 func (c *Client) Speak(ctx context.Context, pcm []byte) error {
 	err := c.speakOnce(ctx, pcm)
 	if err == nil {
@@ -67,101 +65,4 @@ func (c *Client) speakOnce(ctx context.Context, pcm []byte) error {
 		return fmt.Errorf("esp32 returned status %d", resp.StatusCode)
 	}
 	return nil
-}
-
-// SoundStatus mirrors the subset of the ESP32's own /status JSON that the
-// ambient-noise controls care about (on/off, active mode, volume). The
-// device returns this same shape from /on, /off, /mode and /volume too, so
-// every mutating call below can report the resulting state in one round
-// trip instead of a follow-up /status fetch.
-type SoundStatus struct {
-	On     bool    `json:"on"`
-	Mode   string  `json:"mode"`
-	Volume float64 `json:"volume"`
-}
-
-func (c *Client) statusRequest(ctx context.Context, path string) (SoundStatus, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, fmt.Sprintf("http://%s%s", c.Host, path), nil)
-	if err != nil {
-		return SoundStatus{}, err
-	}
-	if c.APIToken != "" {
-		req.Header.Set("X-Token", c.APIToken)
-	}
-
-	resp, err := c.http.Do(req)
-	if err != nil {
-		return SoundStatus{}, fmt.Errorf("esp32 request: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return SoundStatus{}, fmt.Errorf("esp32 returned status %d", resp.StatusCode)
-	}
-	var status SoundStatus
-	if err := json.NewDecoder(resp.Body).Decode(&status); err != nil {
-		return SoundStatus{}, fmt.Errorf("decode esp32 status: %w", err)
-	}
-	return status, nil
-}
-
-// Status fetches the device's current on/off, mode, and volume.
-func (c *Client) Status(ctx context.Context) (SoundStatus, error) {
-	return c.statusRequest(ctx, "/status")
-}
-
-// SetPower turns the ambient sound on or off.
-func (c *Client) SetPower(ctx context.Context, on bool) (SoundStatus, error) {
-	if on {
-		return c.statusRequest(ctx, "/on")
-	}
-	return c.statusRequest(ctx, "/off")
-}
-
-// SetMode switches which ambient noise generator is playing.
-func (c *Client) SetMode(ctx context.Context, mode string) (SoundStatus, error) {
-	return c.statusRequest(ctx, "/mode?name="+url.QueryEscape(mode))
-}
-
-// SetVolume sets playback volume, 0.0-1.0.
-func (c *Client) SetVolume(ctx context.Context, level float64) (SoundStatus, error) {
-	return c.statusRequest(ctx, fmt.Sprintf("/volume?level=%.2f", level))
-}
-
-// Modes lists the device's ambient noise generators. "speak" is excluded:
-// it's the internal mode the device switches itself into when gear-box
-// pushes TTS audio to /speak, not something a person should pick from a
-// mode list.
-func (c *Client) Modes(ctx context.Context) ([]string, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, fmt.Sprintf("http://%s/modes", c.Host), nil)
-	if err != nil {
-		return nil, err
-	}
-	if c.APIToken != "" {
-		req.Header.Set("X-Token", c.APIToken)
-	}
-
-	resp, err := c.http.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("esp32 request: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("esp32 returned status %d", resp.StatusCode)
-	}
-	var body struct {
-		Modes []string `json:"modes"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
-		return nil, fmt.Errorf("decode esp32 modes: %w", err)
-	}
-
-	modes := make([]string, 0, len(body.Modes))
-	for _, m := range body.Modes {
-		if m != "speak" {
-			modes = append(modes, m)
-		}
-	}
-	return modes, nil
 }

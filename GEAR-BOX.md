@@ -12,11 +12,13 @@ device registry, no database, and no polling: the website posts text,
 gear-box runs Piper, and the resulting PCM gets POSTed straight to the
 ESP32's `/speak` endpoint. gear-box doesn't retain any record of what was
 spoken — no history, in memory or otherwise — the text is synthesized,
-pushed, and forgotten. The ambient noise-machine modes already on the
-ESP32 (white/pink/brown/rain/ocean/fan/tone) and their power/volume
-controls are exposed in gear-box's UI too, proxied through `/api/sound/*`
-(gear-box's server is the only thing with the ESP32's LAN address and
-optional API token, so the frontend never talks to the device directly).
+pushed, and forgotten. The ESP32 is speech-only: it used to also run a set
+of ambient noise-machine generators (white/pink/brown/rain/ocean/fan/tone),
+but driving them at high volume was pulling enough current through the I2S
+amp to brown out the chip mid-playback, so that whole feature — the
+generators in firmware and the mode/volume/power controls in gear-box's
+UI — was removed rather than chasing a safe volume ceiling for a feature
+nobody needed.
 
 ## Hardware: the sound_machine ESP32
 
@@ -99,13 +101,6 @@ same ports).
 - `POST /api/speak` — `{"text": "..."}` (max 200 chars). Synthesizes with
   Piper and pushes the result to the ESP32. Nothing about the text is
   retained afterward.
-- `GET /api/sound/status` — the ESP32's current `{on, mode, volume}`.
-- `GET /api/sound/modes` — available ambient modes (excludes `speak`,
-  which is the device's own internal mode, not something to pick from a
-  menu).
-- `POST /api/sound/mode` — `{"name": "..."}`, one of the above.
-- `POST /api/sound/volume` — `{"level": 0.0-1.0}`.
-- `POST /api/sound/power` — `{"on": true|false}`.
 - `GET /api/health`
 
 ## Where things live

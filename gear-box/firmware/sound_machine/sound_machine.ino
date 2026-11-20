@@ -2,8 +2,6 @@
 #include <WebServer.h>
 #include <ESPmDNS.h>
 #include <ESP_I2S.h>
-#include <esp_system.h>
-#include <math.h>
 #include "secrets.h"
 
 // ---- Pin assignments ----
@@ -16,9 +14,6 @@
 #define SAMPLE_RATE 22050
 #define BUFFER_SAMPLES 256
 #define FADE_MS 300.0f
-
-enum Mode { MODE_WHITE = 0, MODE_PINK, MODE_BROWN, MODE_RAIN, MODE_OCEAN, MODE_FAN, MODE_TONE, MODE_SPEAK, MODE_COUNT };
-static const char *MODE_NAMES[MODE_COUNT] = { "white", "pink", "brown", "rain", "ocean", "fan", "tone", "speak" };
 
 // Speech audio is streamed into a small, fixed-size ring buffer as it
 // arrives over HTTP and drained by audioTask in real time -- it is never
@@ -38,7 +33,6 @@ volatile bool speakStreamAuthorized = false;
 volatile size_t speakStreamReceived = 0;
 
 volatile bool isOn = true;
-volatile int currentMode = MODE_WHITE;
 volatile float currentVolume = 0.3f;
 
 static inline size_t speakRingFree() {
@@ -50,120 +44,17 @@ I2SClass i2s;
 WebServer server(80);
 TaskHandle_t audioTaskHandle = nullptr;
 
-// ---- Noise generators ----
-
-static inline float randFloat() {
-  return ((float)esp_random() / (float)UINT32_MAX) * 2.0f - 1.0f;
-}
-
-struct Droplet {
-  bool active;
-  float env;
-  float decay;
-};
-
-struct GenState {
-  float pb0, pb1, pb2, pb3, pb4, pb5, pb6; // pink
-  float brown;
-  float hpPrevIn, hpPrevOut; // rain hiss highpass
-  Droplet droplets[8];
-  float oceanBrown, oceanPhase;
-  float fanLP, fanHumPhase;
-  float tonePhase;
-};
-static GenState gs;
-
-void resetGenState() {
-  memset(&gs, 0, sizeof(gs));
-}
-
-float generateSample(Mode mode) {
-  float white = randFloat();
-
-  switch (mode) {
-    case MODE_WHITE:
-      return white;
-
-    case MODE_PINK: {
-      gs.pb0 = 0.99886f * gs.pb0 + white * 0.0555179f;
-      gs.pb1 = 0.99332f * gs.pb1 + white * 0.0750759f;
-      gs.pb2 = 0.96900f * gs.pb2 + white * 0.1538520f;
-      gs.pb3 = 0.86650f * gs.pb3 + white * 0.3104856f;
-      gs.pb4 = 0.55000f * gs.pb4 + white * 0.5329522f;
-      gs.pb5 = -0.7616f * gs.pb5 - white * 0.0168980f;
-      float pink = gs.pb0 + gs.pb1 + gs.pb2 + gs.pb3 + gs.pb4 + gs.pb5 + gs.pb6 + white * 0.5362f;
-      gs.pb6 = white * 0.115926f;
-      return pink * 0.11f;
-    }
-
-    case MODE_BROWN: {
-      gs.brown = (gs.brown + 0.02f * white) / 1.02f;
-      return gs.brown * 3.5f;
-    }
-
-    case MODE_RAIN: {
-      float hp = white - gs.hpPrevIn + 0.95f * gs.hpPrevOut;
-      gs.hpPrevIn = white;
-      gs.hpPrevOut = hp;
-      float out = hp * 0.35f;
-
-      if (randFloat() > 0.9995f) {
-        for (auto &d : gs.droplets) {
-          if (!d.active) {
-            d.active = true;
-            d.env = 1.0f;
-            d.decay = 0.985f + (randFloat() * 0.5f + 0.5f) * 0.01f;
-            break;
-          }
-        }
-      }
-      for (auto &d : gs.droplets) {
-        if (d.active) {
-          out += d.env * randFloat() * 0.6f;
-          d.env *= d.decay;
-          if (d.env < 0.01f) d.active = false;
-        }
-      }
-      return out;
-    }
-
-    case MODE_OCEAN: {
-      gs.oceanBrown = (gs.oceanBrown + 0.02f * white) / 1.02f;
-      float brownOut = gs.oceanBrown * 3.5f;
-      gs.oceanPhase += 2.0f * PI * (1.0f / 9.0f) / SAMPLE_RATE;
-      if (gs.oceanPhase > 2.0f * PI) gs.oceanPhase -= 2.0f * PI;
-      float swell = 0.5f + 0.5f * sinf(gs.oceanPhase);
-      return brownOut * (0.3f + 0.7f * swell);
-    }
-
-    case MODE_FAN: {
-      gs.fanLP += 0.08f * (white - gs.fanLP);
-      gs.fanHumPhase += 2.0f * PI * 110.0f / SAMPLE_RATE;
-      if (gs.fanHumPhase > 2.0f * PI) gs.fanHumPhase -= 2.0f * PI;
-      float hum = sinf(gs.fanHumPhase) * 0.05f;
-      return gs.fanLP * 0.9f + hum;
-    }
-
-    case MODE_TONE: {
-      gs.tonePhase += 2.0f * PI * 440.0f / SAMPLE_RATE;
-      if (gs.tonePhase > 2.0f * PI) gs.tonePhase -= 2.0f * PI;
-      return sinf(gs.tonePhase) * 0.5f;
-    }
-
-    case MODE_SPEAK: {
-      if (speakRingTail == speakRingHead) return 0.0f; // nothing buffered yet, or underrun
-      uint8_t lo = speakRing[speakRingTail];
-      speakRingTail = (speakRingTail + 1) % SPEAK_RING_BYTES;
-      if (speakRingTail == speakRingHead) return 0.0f; // odd byte stranded at a chunk boundary
-      uint8_t hi = speakRing[speakRingTail];
-      speakRingTail = (speakRingTail + 1) % SPEAK_RING_BYTES;
-      int16_t sample = (int16_t)((hi << 8) | lo); // little-endian
-      return sample / 32768.0f;
-    }
-
-    default:
-      return 0.0f;
-  }
+// Pulls the next sample out of speakRing, or silence if nothing's buffered
+// (idle between clips, or an underrun).
+float nextSample() {
+  if (speakRingTail == speakRingHead) return 0.0f;
+  uint8_t lo = speakRing[speakRingTail];
+  speakRingTail = (speakRingTail + 1) % SPEAK_RING_BYTES;
+  if (speakRingTail == speakRingHead) return 0.0f; // odd byte stranded at a chunk boundary
+  uint8_t hi = speakRing[speakRingTail];
+  speakRingTail = (speakRingTail + 1) % SPEAK_RING_BYTES;
+  int16_t sample = (int16_t)((hi << 8) | lo); // little-endian
+  return sample / 32768.0f;
 }
 
 // ---- Audio task ----
@@ -182,20 +73,14 @@ void setOff() {
 void audioTask(void *param) {
   (void)param;
   static int16_t buf[BUFFER_SAMPLES];
-  Mode lastMode = (Mode)-1;
   float envGain = 0.0f;
   const float envStep = 1.0f / (FADE_MS / 1000.0f * SAMPLE_RATE);
 
   for (;;) {
-    Mode mode = (Mode)currentMode;
-    if (mode != lastMode) {
-      resetGenState();
-      lastMode = mode;
-    }
     float target = currentVolume;
 
     for (int i = 0; i < BUFFER_SAMPLES; i++) {
-      float raw = generateSample(mode);
+      float raw = nextSample();
       if (envGain < target) envGain = min(target, envGain + envStep);
       else if (envGain > target) envGain = max(target, envGain - envStep);
 
@@ -217,13 +102,6 @@ void audioTask(void *param) {
 
 // ---- HTTP API ----
 
-int parseModeName(const String &name) {
-  for (int i = 0; i < MODE_COUNT; i++) {
-    if (name.equalsIgnoreCase(MODE_NAMES[i])) return i;
-  }
-  return -1;
-}
-
 bool isAuthorized() {
   if (strlen(API_TOKEN) == 0) return true;
   String token = server.hasArg("token") ? server.arg("token") : server.header("X-Token");
@@ -237,12 +115,11 @@ bool checkAuth() {
 }
 
 String buildStatusJson() {
-  char buf[320];
+  char buf[256];
   snprintf(buf, sizeof(buf),
-           "{\"on\":%s,\"mode\":\"%s\",\"volume\":%.2f,\"ip\":\"%s\",\"rssi\":%d,\"uptime_s\":%lu,"
+           "{\"on\":%s,\"volume\":%.2f,\"ip\":\"%s\",\"rssi\":%d,\"uptime_s\":%lu,"
            "\"free_heap\":%u,\"max_alloc_heap\":%u}",
            isOn ? "true" : "false",
-           MODE_NAMES[currentMode],
            currentVolume,
            WiFi.localIP().toString().c_str(),
            (int)WiFi.RSSI(),
@@ -272,21 +149,6 @@ void handleOff() {
 void handleToggle() {
   if (!checkAuth()) return;
   if (isOn) setOff(); else setOn();
-  server.send(200, "application/json", buildStatusJson());
-}
-
-void handleMode() {
-  if (!checkAuth()) return;
-  if (!server.hasArg("name")) {
-    server.send(400, "application/json", "{\"error\":\"missing name\"}");
-    return;
-  }
-  int m = parseModeName(server.arg("name"));
-  if (m < 0) {
-    server.send(400, "application/json", "{\"error\":\"unknown mode\"}");
-    return;
-  }
-  currentMode = m;
   server.send(200, "application/json", buildStatusJson());
 }
 
@@ -339,7 +201,6 @@ void handleSpeakRaw() {
 
       speakRingHead = 0;
       speakRingTail = 0;
-      currentMode = MODE_SPEAK; // start draining as bytes arrive, not after the whole clip lands
       break;
     }
 
@@ -380,19 +241,6 @@ void handleSpeakPost() {
 
 void handleSpeakGetNotAllowed() {
   server.send(405, "application/json", "{\"error\":\"POST only\"}");
-}
-
-void handleModes() {
-  if (!checkAuth()) return;
-  String json = "{\"modes\":[";
-  for (int i = 0; i < MODE_COUNT; i++) {
-    if (i) json += ",";
-    json += "\"";
-    json += MODE_NAMES[i];
-    json += "\"";
-  }
-  json += "]}";
-  server.send(200, "application/json", json);
 }
 
 void handleNotFound() {
@@ -448,9 +296,7 @@ void setup() {
   server.on("/on", HTTP_ANY, handleOn);
   server.on("/off", HTTP_ANY, handleOff);
   server.on("/toggle", HTTP_ANY, handleToggle);
-  server.on("/mode", HTTP_ANY, handleMode);
   server.on("/volume", HTTP_ANY, handleVolume);
-  server.on("/modes", HTTP_ANY, handleModes);
   server.on("/speak", HTTP_POST, handleSpeakPost, handleSpeakRaw);
   server.on("/speak", HTTP_GET, handleSpeakGetNotAllowed);
   server.onNotFound(handleNotFound);
@@ -482,8 +328,8 @@ void loop() {
     if (reading != stableState) {
       stableState = reading;
       if (stableState == LOW) {
-        currentMode = (currentMode + 1) % MODE_COUNT;
-        Serial.printf("Mode -> %s\n", MODE_NAMES[currentMode]);
+        if (isOn) setOff(); else setOn();
+        Serial.printf("Power -> %s\n", isOn ? "on" : "off");
       }
     }
   }

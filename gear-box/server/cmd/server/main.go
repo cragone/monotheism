@@ -26,7 +26,7 @@ func main() {
 		log.Fatalf("fatal: embed fs: %v", err)
 	}
 
-	engine := router.New(distFS, synth, esp32Client, esp32Client)
+	engine := router.New(distFS, synth, esp32Client)
 
 	log.Printf("info: gear-box server listening on :%s (esp32 at %s)", cfg.Port, cfg.ESP32Host)
 	if err := engine.Run(":" + cfg.Port); err != nil {
