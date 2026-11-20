@@ -3,7 +3,10 @@
 A Go+Gin backend and a React+TS+Tailwind+daisyUI frontend that synthesizes
 speech with [Piper](https://github.com/rhasspy/piper) (local, offline,
 neural TTS) and pushes the finished audio over the LAN to an ESP32-S3
-("sound_machine") that plays it through a speaker.
+("sound_machine") that plays it through a speaker. A second ESP32-S3
+("mic_listener") captures audio with an I2S mic and pushes what it heard
+back to gear-box, closing the loop — see "Hardware: the mic_listener
+ESP32" below.
 
 ## Why this is simple
 
@@ -75,6 +78,56 @@ testing against the real device:
   allows) — `esp32.Client`'s 30s timeout accounts for a near-`MaxTextChars`
   clip.
 
+## Hardware: the mic_listener ESP32
+
+Firmware lives at `gear-box/firmware/mic_listener/` — a second, separate
+ESP32-S3 (specifically an ESP32-S3-WROOM-2, octal flash/PSRAM) with an I2S
+MEMS mic, built/flashed the same way as sound_machine:
+
+```
+arduino-cli compile --fqbn esp32:esp32:esp32s3:FlashMode=opi,PSRAM=opi,FlashSize=16M gear-box/firmware/mic_listener
+arduino-cli upload  --fqbn esp32:esp32:esp32s3:FlashMode=opi,PSRAM=opi,FlashSize=16M -p <serial-port> gear-box/firmware/mic_listener
+```
+
+Verify those `FlashMode=opi,PSRAM=opi` option keys against your installed
+core (`arduino-cli board details -b esp32:esp32:esp32s3`) — WROOM-2 is
+always octal flash and needs octal PSRAM selected explicitly; the plain
+ESP32S3 Dev Module board entry's defaults are for quad flash/PSRAM modules.
+
+Pin assignments, sample rate, and the mic-capture internals (FreeRTOS task
++ ring buffer, in `mic.c`/`mic.h`) are documented in `mic_config.h`'s
+comments. Like sound_machine, copy `secrets.example.h` to `secrets.h`
+(gitignored) and fill in WiFi credentials, `GEARBOX_HOST` (gear-box's LAN
+address), and optionally `GEARBOX_API_TOKEN`.
+
+The firmware runs a crude RMS-threshold voice-activity gate (see
+`MIC_VAD_*` in `mic_config.h`): once a window of audio crosses a loudness
+threshold it starts buffering an "utterance" into a PSRAM-backed buffer
+(allocated once at boot, reused forever — the same anti-fragmentation
+reasoning as `speakRing`/`micRing`), and once RMS has stayed below
+threshold for `MIC_VAD_SILENCE_MS` it POSTs the whole utterance to
+gear-box and resets. There's no real VAD/noise-floor calibration — the
+threshold is a hand-picked constant, tune it against your actual room.
+
+### Wire contract: `POST /hear`
+
+The mirror image of `/speak`: `mic_listener` is the only thing that ever
+calls this. Body is **raw PCM: mono, 16-bit signed little-endian,
+22050Hz** (mic_listener samples straight at this rate so no resampling is
+needed on either end) — same shape `/speak` expects, since gear-box
+currently just forwards the body through unchanged. Capped at
+`MaxHearBytes` (882000 bytes / 20s, mirroring `piper.MaxOutputBytes`); a
+larger body gets 413. Authenticated via `X-Token` if `MIC_API_TOKEN` is
+set (unset = open, mirroring `ESP32_API_TOKEN`'s own default).
+
+**This is intentionally just an echo today.** gear-box doesn't transcribe
+or understand what it hears — `Hear` pushes the uploaded PCM straight to
+`esp32.Client.Speak`, the same call `/speak` uses, so sound_machine just
+plays back whatever mic_listener recorded. The planned next step is
+swapping that direct forward for something that actually reasons about
+the audio (likely: transcribe, run an LLM, synthesize a reply with Piper)
+before talking to sound_machine — `Hear`'s body is where that goes.
+
 ## Local dev (no Docker)
 
 `gear-box/flake.nix` / `gear-box/shell.nix` (`nix develop` or `nix-shell`
@@ -102,6 +155,9 @@ same ports).
   Piper and pushes the result to the ESP32. Nothing about the text is
   retained afterward.
 - `GET /api/health`
+- `POST /hear` — raw PCM from mic_listener (see its wire contract above).
+  Not under `/api`: it's device-to-server traffic, not a browser-facing
+  endpoint, same as `/speak` is for sound_machine.
 
 ## Where things live
 
@@ -109,7 +165,8 @@ same ports).
 - `gear-box/server/` — Go+Gin backend. No GORM/SQLite/migrations — this is
   the one deliberate scope-cut from vecna's stack, since there's no
   persistent state worth a database here.
-- `gear-box/firmware/sound_machine/` — the ESP32-S3 Arduino sketch.
+- `gear-box/firmware/sound_machine/` — the speaker's ESP32-S3 Arduino sketch.
+- `gear-box/firmware/mic_listener/` — the mic's ESP32-S3 Arduino sketch.
 - `docker-compose.yml` service: `gear-box` — reads `ESP32_HOST` from the
   environment.
 - `kubernetes/gear-box-production.yaml` / `kubernetes/gear-box-ingress.yaml`
@@ -172,13 +229,20 @@ add a Cloudflare Tunnel ingress rule for `gear-box.charlesragone.com` (→
    `curl -X POST --data-binary @out.pcm -H "Content-Type: application/octet-stream" http://<esp32-ip>/speak`
    — confirms the POST handler and playback work, and resolves the
    body-read question flagged above, before any Go code is involved.
-3. **gear-box server, local, against the real device**:
+3. **mic_listener alone**: flash it, then
+   `curl -X POST --data-binary @out.pcm -H "Content-Type: application/octet-stream" http://<gear-box-host>/hear`
+   to check `/hear` and the forward-to-speaker path independent of the
+   mic's own VAD; then talk near the mic and confirm sound_machine plays
+   back what you said (and check the mic's Serial log for `speech
+   start`/`speech end` lines matching your actual speech, to sanity-check
+   `MIC_VAD_RMS_THRESHOLD`).
+4. **gear-box server, local, against the real device**:
    `ESP32_HOST=<esp32-ip> run-server.sh`, then
    `curl -X POST localhost:8083/api/speak -d '{"text":"hello"}' -H 'Content-Type: application/json'`.
-4. **Frontend, local**: `run-frontend.sh`, use the real page in a browser.
-5. **Container build, local, still against the real device**:
+5. **Frontend, local**: `run-frontend.sh`, use the real page in a browser.
+6. **Container build, local, still against the real device**:
    `docker build -t gear-box:dev -f gear-box/dockerfile gear-box/` then
    `docker run -p 8083:80 -e ESP32_HOST=<esp32-ip> gear-box:dev` — catches
    any Piper-fetch/packaging issue before it reaches the bw server.
-6. Only after 1–5 pass, run `deploy-bw-server.sh` by hand once before
+7. Only after 1–6 pass, run `deploy-bw-server.sh` by hand once before
    trusting CI's webhook trigger.

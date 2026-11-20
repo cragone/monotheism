@@ -16,8 +16,11 @@
 #define MIC_DIN_PIN 6 // SD / DOUT (mic's output, this chip's input)
 #endif
 
+// 22050Hz matches sound_machine's fixed I2S playback rate (and
+// piper.SampleRate on the server) exactly, so a captured utterance can be
+// forwarded to gear-box and on to the speaker with no resampling step.
 #ifndef MIC_SAMPLE_RATE
-#define MIC_SAMPLE_RATE 16000
+#define MIC_SAMPLE_RATE 22050
 #endif
 
 // Most small round I2S MEMS breakouts (SPH0645/ICS-43434/INMP441-style)
@@ -56,3 +59,27 @@
 #ifndef MIC_TASK_CORE
 #define MIC_TASK_CORE 1
 #endif
+
+// ---- Utterance capture (simple RMS-threshold VAD) ----
+// This is a deliberately crude voice-activity gate, not real VAD: a window
+// of audio counts as "speech" once its RMS crosses MIC_VAD_RMS_THRESHOLD,
+// and the utterance ends once RMS has stayed below that for
+// MIC_VAD_SILENCE_MS straight. Tune the threshold against your actual
+// room/mic -- there's no calibration step.
+#ifndef MIC_VAD_RMS_THRESHOLD
+#define MIC_VAD_RMS_THRESHOLD 600
+#endif
+#ifndef MIC_VAD_SILENCE_MS
+#define MIC_VAD_SILENCE_MS 800
+#endif
+#ifndef MIC_VAD_MIN_UTTERANCE_MS
+#define MIC_VAD_MIN_UTTERANCE_MS 300 // shorter blips are dropped, not sent
+#endif
+
+// Sanity cap on a single utterance, well under both gear-box's own upload
+// cap and the speaker firmware's SPEAK_MAX_BYTES, since this buffer gets
+// forwarded almost as-is from mic to speaker.
+#ifndef MIC_VAD_MAX_SECONDS
+#define MIC_VAD_MAX_SECONDS 8
+#endif
+#define MIC_VAD_MAX_BYTES ((size_t)MIC_VAD_MAX_SECONDS * (size_t)MIC_SAMPLE_RATE * sizeof(int16_t))
