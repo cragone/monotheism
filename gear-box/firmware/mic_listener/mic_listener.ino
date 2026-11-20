@@ -1,45 +1,142 @@
+#include <WiFi.h>
+#include <HTTPClient.h>
 #include <math.h>
 #include "mic.h"
 #include "mic_config.h"
+#include "secrets.h"
 
-// Minimal demo: start the mic and log RMS/peak every ~200ms so you can
-// verify it reacts to sound before wiring it into anything bigger.
+// Captures an utterance (RMS-threshold VAD, see mic_config.h) and POSTs it
+// to gear-box's /hear endpoint as raw PCM -- mono, 16-bit signed
+// little-endian, MIC_SAMPLE_RATE Hz. gear-box currently just echoes that
+// straight back out through sound_machine's speaker, unchanged: this is
+// step one (mic -> gear-box -> speaker) ahead of gear-box running an LLM
+// over what it heard instead of just replaying it.
+//
+// The utterance buffer is allocated once from PSRAM at startup and reused
+// for every utterance -- same reasoning as speakRing/micRing elsewhere in
+// this codebase: a buffer this size (MIC_VAD_MAX_SECONDS worth of audio)
+// shouldn't come from a repeated malloc/free cycle, and it's too big for
+// this chip's internal SRAM to hold as a plain static array.
+static uint8_t *utteranceBuf = nullptr;
+static size_t utteranceLen = 0;
+static bool speaking = false;
+static unsigned long speechStartedAt = 0;
+static unsigned long lastLoudAt = 0;
+
+static void connectWiFi() {
+  WiFi.mode(WIFI_STA);
+  WiFi.begin(WIFI_SSID, WIFI_PASS);
+  Serial.print("Connecting to WiFi");
+  unsigned long start = millis();
+  while (WiFi.status() != WL_CONNECTED && millis() - start < 20000) {
+    delay(300);
+    Serial.print(".");
+  }
+  Serial.println();
+  if (WiFi.status() == WL_CONNECTED) {
+    Serial.print("WiFi connected, IP: ");
+    Serial.println(WiFi.localIP());
+  } else {
+    Serial.println("WiFi not connected yet, will keep retrying in loop()");
+  }
+}
+
+static void sendUtterance(const uint8_t *pcm, size_t len) {
+  HTTPClient http;
+  String url = String("http://") + GEARBOX_HOST + "/hear";
+  http.begin(url);
+  http.setTimeout(15000);
+  http.addHeader("Content-Type", "application/octet-stream");
+  if (strlen(GEARBOX_API_TOKEN) > 0) {
+    http.addHeader("X-Token", GEARBOX_API_TOKEN);
+  }
+
+  int status = http.POST((uint8_t *)pcm, len);
+  Serial.printf("sent %u bytes to gear-box, status=%d\n", (unsigned)len, status);
+  http.end();
+}
 
 void setup() {
   Serial.begin(115200);
   delay(200);
+
+  utteranceBuf = (uint8_t *)heap_caps_malloc(MIC_VAD_MAX_BYTES, MALLOC_CAP_SPIRAM);
+  if (!utteranceBuf) {
+    Serial.println("failed to allocate utterance buffer from PSRAM");
+    while (true) delay(1000);
+  }
 
   if (!micInit()) {
     Serial.println("mic init failed");
     while (true) delay(1000);
   }
   micStart();
-  Serial.println("mic capture started");
+
+  connectWiFi();
+  Serial.println("listening");
 }
 
 void loop() {
   static int16_t buf[MIC_READ_FRAMES];
-  static double sumSquares = 0;
-  static int peak = 0;
-  static size_t windowCount = 0;
-  static unsigned long lastReport = 0;
+
+  static unsigned long lastWifiCheck = 0;
+  if (millis() - lastWifiCheck > 15000) {
+    lastWifiCheck = millis();
+    wl_status_t st = WiFi.status();
+    if (st == WL_DISCONNECTED || st == WL_CONNECTION_LOST || st == WL_CONNECT_FAILED || st == WL_NO_SSID_AVAIL) {
+      Serial.printf("WiFi status %d, reconnecting...\n", (int)st);
+      WiFi.reconnect();
+    }
+  }
 
   size_t n = micRead(buf, MIC_READ_FRAMES);
+  if (n == 0) {
+    delay(2);
+    return;
+  }
+
+  double sumSquares = 0;
   for (size_t i = 0; i < n; i++) {
     sumSquares += (double)buf[i] * (double)buf[i];
-    int mag = abs((int)buf[i]);
-    if (mag > peak) peak = mag;
-    windowCount++;
+  }
+  double rms = sqrt(sumSquares / n);
+  bool loud = rms > MIC_VAD_RMS_THRESHOLD;
+
+  if (loud) {
+    if (!speaking) {
+      speaking = true;
+      utteranceLen = 0;
+      speechStartedAt = millis();
+      Serial.println("speech start");
+    }
+    lastLoudAt = millis();
   }
 
-  if (millis() - lastReport >= 200) {
-    lastReport = millis();
-    double rms = windowCount > 0 ? sqrt(sumSquares / windowCount) : 0.0;
-    Serial.printf("rms=%.1f peak=%d samples=%u\n", rms, peak, (unsigned)windowCount);
-    sumSquares = 0;
-    peak = 0;
-    windowCount = 0;
-  }
+  if (speaking) {
+    size_t bytesIn = n * sizeof(int16_t);
+    size_t room = MIC_VAD_MAX_BYTES - utteranceLen;
+    size_t toCopy = bytesIn < room ? bytesIn : room;
+    memcpy(utteranceBuf + utteranceLen, (const uint8_t *)buf, toCopy);
+    utteranceLen += toCopy;
 
-  delay(5);
+    bool silenceTimedOut = millis() - lastLoudAt > MIC_VAD_SILENCE_MS;
+    bool full = utteranceLen >= MIC_VAD_MAX_BYTES;
+
+    if (silenceTimedOut || full) {
+      speaking = false;
+      unsigned long durationMs = millis() - speechStartedAt;
+
+      if (durationMs >= MIC_VAD_MIN_UTTERANCE_MS && utteranceLen > 0) {
+        Serial.printf("speech end: %lums, %u bytes\n", durationMs, (unsigned)utteranceLen);
+        if (WiFi.status() == WL_CONNECTED) {
+          sendUtterance(utteranceBuf, utteranceLen);
+        } else {
+          Serial.println("WiFi down, dropping utterance");
+        }
+      } else {
+        Serial.println("speech too short, dropped");
+      }
+      utteranceLen = 0;
+    }
+  }
 }
