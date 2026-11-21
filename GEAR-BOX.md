@@ -109,16 +109,33 @@ threshold for `MIC_VAD_SILENCE_MS` it POSTs the whole utterance to
 gear-box and resets. There's no real VAD/noise-floor calibration — the
 threshold is a hand-picked constant, tune it against your actual room.
 
+### Reaching gear-box from the LAN: the NodePort
+
+gear-box's production `Service` is `NodePort`, not `ClusterIP` (see
+`kubernetes/gear-box-production.yaml`) — the bw server's LAN IP on port
+**30080** reaches gear-box directly, with **no basic auth**, same trust
+model `sound_machine`'s own `/speak` already has. This exists because the
+*only* other way in is the `gear-box.charlesragone.com` Traefik
+`IngressRoute`, gated by `vecna-basic-auth` for the whole host with no
+path-scoped carve-out — fine for a browser, but mic_listener (or any
+future LAN device pushing to gear-box) can't do an interactive login.
+**The whole app is reachable on this NodePort**, not just `/hear` — a
+NodePort can't do path-based routing — so anything hit at
+`<bw-server-ip>:30080` (including `/api/speak`) skips the login the public
+hostname requires. `MIC_API_TOKEN` is the only gate actually in front of
+`/hear` itself.
+
 ### Wire contract: `POST /hear`
 
 The mirror image of `/speak`: `mic_listener` is the only thing that ever
-calls this. Body is **raw PCM: mono, 16-bit signed little-endian,
-22050Hz** (mic_listener samples straight at this rate so no resampling is
-needed on either end) — same shape `/speak` expects, since gear-box
-currently just forwards the body through unchanged. Capped at
-`MaxHearBytes` (882000 bytes / 20s, mirroring `piper.MaxOutputBytes`); a
-larger body gets 413. Authenticated via `X-Token` if `MIC_API_TOKEN` is
-set (unset = open, mirroring `ESP32_API_TOKEN`'s own default).
+calls this, over the NodePort above. Body is **raw PCM: mono, 16-bit
+signed little-endian, 22050Hz** (mic_listener samples straight at this
+rate so no resampling is needed on either end) — same shape `/speak`
+expects, since gear-box currently just forwards the body through
+unchanged. Capped at `MaxHearBytes` (882000 bytes / 20s, mirroring
+`piper.MaxOutputBytes`); a larger body gets 413. Authenticated via
+`X-Token` if `MIC_API_TOKEN` is set (unset = open, mirroring
+`ESP32_API_TOKEN`'s own default).
 
 **This is intentionally just an echo today.** gear-box doesn't transcribe
 or understand what it hears — `Hear` pushes the uploaded PCM straight to
@@ -230,7 +247,7 @@ add a Cloudflare Tunnel ingress rule for `gear-box.charlesragone.com` (→
    — confirms the POST handler and playback work, and resolves the
    body-read question flagged above, before any Go code is involved.
 3. **mic_listener alone**: flash it, then
-   `curl -X POST --data-binary @out.pcm -H "Content-Type: application/octet-stream" http://<gear-box-host>/hear`
+   `curl -X POST --data-binary @out.pcm -H "Content-Type: application/octet-stream" http://<bw-server-ip>:30080/hear`
    to check `/hear` and the forward-to-speaker path independent of the
    mic's own VAD; then talk near the mic and confirm sound_machine plays
    back what you said (and check the mic's Serial log for `speech

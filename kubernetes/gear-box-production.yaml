@@ -53,6 +53,16 @@ spec:
             periodSeconds: 20
             failureThreshold: 3
 ---
+# NodePort, not ClusterIP: the mic_listener ESP32 (and any future LAN
+# device) needs to reach gear-box's /hear directly, the same bare-LAN-trust
+# model sound_machine's /speak already uses -- the public hostname is
+# gated by vecna-basic-auth, which a device can't log into, and there's no
+# separate path-scoped bypass for it in the Traefik IngressRoute. This
+# NodePort exposes the whole app (not just /hear) unauthenticated on the
+# LAN at <node-ip>:30080; /hear itself is still gated by MIC_API_TOKEN if
+# set. The IngressRoute in gear-box-ingress.yaml still targets this same
+# Service by name/port and is unaffected -- Traefik resolves it via the
+# Service's ClusterIP, which a NodePort Service still has.
 apiVersion: v1
 kind: Service
 metadata:
@@ -65,4 +75,5 @@ spec:
     - protocol: TCP
       port: 80
       targetPort: 80
-  type: ClusterIP
+      nodePort: 30080
+  type: NodePort
