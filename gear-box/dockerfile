@@ -50,12 +50,56 @@ RUN apk add --no-cache curl tar && \
     curl -sSL -o /opt/models/voice.onnx "${VOICE_BASE}/${VOICE}.onnx" && \
     curl -sSL -o /opt/models/voice.onnx.json "${VOICE_BASE}/${VOICE}.onnx.json"
 
+# whisper.cpp has no binary releases under stable version tags -- only
+# under rolling nightly "b<N>" build tags that upstream periodically
+# prunes (confirmed: the latest stable-looking tag, v1.9.5, ships no
+# binary assets at all). WHISPER_BUILD pins one such tag; if a build ever
+# starts failing to fetch it, it's almost certainly because this tag was
+# pruned and needs bumping to a current one from
+# https://github.com/ggml-org/whisper.cpp/releases, not a sign of a real
+# regression. The model is fetched here too, same reasoning as Piper's
+# voice model above.
+FROM alpine:3.20 AS whisper-fetch
+ARG WHISPER_BUILD=b5907
+ARG TARGETARCH
+ARG WHISPER_MODEL=base.en
+RUN apk add --no-cache curl tar && \
+    case "$TARGETARCH" in \
+      amd64) WHISPER_ARCH="x64" ;; \
+      arm64) WHISPER_ARCH="arm64" ;; \
+      *) echo "unsupported TARGETARCH: $TARGETARCH" >&2; exit 1 ;; \
+    esac && \
+    curl -sSL -o /tmp/whisper.tar.gz \
+      "https://github.com/ggml-org/whisper.cpp/releases/download/${WHISPER_BUILD}/whisper-bin-ubuntu-${WHISPER_ARCH}.tar.gz" && \
+    mkdir -p /opt/whisper-install && \
+    tar -xzf /tmp/whisper.tar.gz -C /opt/whisper-install --strip-components=1 && \
+    mkdir -p /opt/models && \
+    curl -sSL -o "/opt/models/whisper-${WHISPER_MODEL}.bin" \
+      "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-${WHISPER_MODEL}.bin"
+
 FROM debian:bookworm-slim
 COPY --from=piper-fetch /opt/piper-install /opt/piper
 ENV PATH="/opt/piper:${PATH}"
 
 COPY --from=piper-fetch /opt/models/ /models/
 ENV PIPER_MODEL_PATH=/models/voice.onnx
+
+# whisper-cli's nightly-build binary is glibc-linked like Piper's (confirmed
+# via `readelf -V`: needs up to GLIBC_2.34, bookworm ships 2.36) and bundles
+# its own libwhisper/libggml*.so next to the binary (resolved via its
+# $ORIGIN RUNPATH, confirmed with `readelf -d`), but unlike Piper's tarball
+# it does NOT bundle libstdc++/libgomp -- confirmed missing via `ldd` against
+# this exact binary. Both must come from the base image explicitly.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      libstdc++6 libgomp1 && \
+    rm -rf /var/lib/apt/lists/*
+
+COPY --from=whisper-fetch /opt/whisper-install /opt/whisper
+ENV PATH="/opt/whisper:${PATH}"
+
+COPY --from=whisper-fetch /opt/models/ /models/
+ENV WHISPER_MODEL_PATH=/models/whisper-base.en.bin
+ENV WHISPER_BINARY=whisper-cli
 
 COPY --from=server-build /gear-box-server /gear-box-server
 

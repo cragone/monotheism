@@ -137,13 +137,97 @@ unchanged. Capped at `MaxHearBytes` (882000 bytes / 20s, mirroring
 `X-Token` if `MIC_API_TOKEN` is set (unset = open, mirroring
 `ESP32_API_TOKEN`'s own default).
 
-**This is intentionally just an echo today.** gear-box doesn't transcribe
-or understand what it hears — `Hear` pushes the uploaded PCM straight to
-`esp32.Client.Speak`, the same call `/speak` uses, so sound_machine just
-plays back whatever mic_listener recorded. The planned next step is
-swapping that direct forward for something that actually reasons about
-the audio (likely: transcribe, run an LLM, synthesize a reply with Piper)
-before talking to sound_machine — `Hear`'s body is where that goes.
+**The echo is still here, but `Hear` now also transcribes.** `Hear` still
+pushes the uploaded PCM straight to `esp32.Client.Speak`, the same call
+`/speak` uses, so sound_machine still plays back whatever mic_listener
+recorded — that round trip keeps working standalone, independent of
+whether transcription succeeds. After that echo succeeds and the HTTP
+response has already gone back to mic_listener, `Hear` kicks off
+transcription (see "Speech-to-text: whisper.cpp" below) in a background
+goroutine and broadcasts the result to any browser tabs listening on
+`GET /api/hear-events` (see "Live push: the `/api/hear-events` SSE feed"
+below).
+
+This is deliberately fire-and-forget rather than part of the HTTP
+response: mic_listener's firmware has a 15s HTTP client timeout
+(`http.setTimeout(15000)`), and an 8s clip (the VAD's own cap) transcribed
+on CPU isn't guaranteed to fit inside that on an unknown-spec home server
+— especially with Piper synthesis potentially running concurrently on the
+same box. A transcription failure is logged server-side and simply means
+no broadcast happens; it never surfaces as an HTTP error to the mic,
+since the echo already succeeded by the time transcription even starts.
+
+The next step beyond this — actually reasoning about what was heard
+(running an LLM over the transcript, synthesizing a reply with Piper)
+rather than just surfacing the transcript — is still future work.
+
+### Speech-to-text: whisper.cpp
+
+`internal/whisper` runs [whisper.cpp](https://github.com/ggml-org/whisper.cpp)'s
+`whisper-cli` as a subprocess, the same architectural pattern as the
+Piper integration above: binary + model baked into the Docker image at
+build time, invoked per-utterance, no runtime fetch.
+
+- **Sample rate mismatch**: mic_listener captures at 22050Hz (to match
+  Piper/sound_machine — see above), but whisper.cpp's stock English
+  models expect 16kHz, and whisper.cpp's own audio reader does not
+  resample for you. `internal/whisper/resample.go` does a simple
+  linear-interpolation resample from 22050Hz to 16000Hz in Go before
+  anything is handed to the subprocess — deliberately not a
+  windowed-sinc/anti-aliasing resampler, since this is a mild downsample
+  feeding a model that already tolerates noisy input, not a
+  mastering-quality requirement.
+- **Why a WAV header**: `whisper-cli` reads audio containers (wav/mp3/flac/ogg)
+  from stdin via `-f -`; it has no raw-headerless-PCM stdin mode.
+  `internal/whisper/wav.go` wraps the resampled PCM in a minimal 44-byte
+  WAV header purely so whisper-cli's reader recognizes it — this never
+  touches disk, it's piped straight to the subprocess's stdin.
+- **Binary pin**: whisper.cpp has no binary releases under stable version
+  tags, only under rolling nightly `b<N>` build tags that upstream
+  periodically prunes (confirmed: `v1.9.5` ships no binary assets at
+  all). `gear-box/dockerfile`'s `WHISPER_BUILD` arg pins one such tag. If
+  a build ever fails to fetch it, check whether that tag still exists at
+  <https://github.com/ggml-org/whisper.cpp/releases> before assuming
+  anything else broke.
+- **Model**: `ggml-base.en.bin` (~142MB), set via `WHISPER_MODEL_PATH`.
+  Chosen over `tiny.en` for better accuracy given mic_listener's crude
+  RMS-VAD already clips word boundaries on a cheap MEMS mic, and over
+  `small.en` to avoid its much larger size/build-time cost for what are
+  short home-automation voice commands.
+- **glibc caveat, the Piper lesson repeated**: whisper-cli's nightly
+  binary is glibc-linked (confirmed via `readelf -V`: needs up to
+  `GLIBC_2.34`, bookworm ships 2.36) and bundles its own
+  `libwhisper`/`libggml*.so` next to the binary (resolved via its
+  `$ORIGIN` RUNPATH — no `LD_LIBRARY_PATH` needed as long as the binary
+  and its `.so` files stay in the same directory). Unlike Piper's
+  tarball, though, it does **not** bundle `libstdc++`/`libgomp` —
+  confirmed missing via `ldd` against the real binary — so the
+  Dockerfile explicitly `apt-get install`s `libstdc++6 libgomp1` in the
+  final stage.
+
+### Live push: the `/api/hear-events` SSE feed
+
+`GET /api/hear-events` (under `/api`, browser-facing — unlike `/hear`
+itself) is a Server-Sent Events stream. Each time `Hear` finishes
+transcribing an utterance, it broadcasts one `heard` event to every
+currently-connected client:
+
+```
+event: heard
+data: {"transcript": "turn on the lights", "waveform": [12, 340, ...], "timestamp": "2026-11-22T10:00:00Z"}
+```
+
+`waveform` is a fixed-size (150-point) downsampled peak-amplitude
+envelope of the utterance's PCM, computed server-side so the payload
+stays small and the browser never needs the full audio.
+
+**There is no backlog or replay.** `internal/sse.Hub` holds no history —
+a client that connects after an event was broadcast simply never sees
+it, by design. This is not a gap to fix: it's the same "retain nothing"
+philosophy as the rest of gear-box (see "Why this is simple" above), and
+this package is explicitly not a revival of the old `internal/history/ring.go`
+removed in a previous commit — don't add a buffer here to make a
+refreshing tab "feel" more complete; that reverses a deliberate choice.
 
 ## Local dev (no Docker)
 
@@ -172,6 +256,9 @@ same ports).
   Piper and pushes the result to the ESP32. Nothing about the text is
   retained afterward.
 - `GET /api/health`
+- `GET /api/hear-events` — SSE stream of `{transcript, waveform, timestamp}`
+  for each transcribed utterance (see "Live push" above). No backlog: a
+  client connecting after an event fires sees nothing until the next one.
 - `POST /hear` — raw PCM from mic_listener (see its wire contract above).
   Not under `/api`: it's device-to-server traffic, not a browser-facing
   endpoint, same as `/speak` is for sound_machine.
@@ -253,13 +340,36 @@ add a Cloudflare Tunnel ingress rule for `gear-box.charlesragone.com` (→
    back what you said (and check the mic's Serial log for `speech
    start`/`speech end` lines matching your actual speech, to sanity-check
    `MIC_VAD_RMS_THRESHOLD`).
-4. **gear-box server, local, against the real device**:
+4. **whisper.cpp alone**: run the baked binary directly against a known
+   sample WAV (e.g. whisper.cpp's own `jfk.wav` test file):
+   `whisper-cli -m /models/whisper-base.en.bin -f jfk.wav -nt -np --output-json -of -`,
+   and `ldd whisper-cli` to confirm no "not found" lines (the
+   `libstdc++`/`libgomp` risk noted above) before any Go code is involved.
+5. **Resampling + whisper.cpp together, local**: capture a real 22050Hz
+   utterance (e.g. the `out.pcm` from step 1, or a real one saved off
+   `/hear`), run it through a small one-off Go harness that calls
+   `whisper.Resample` + the subprocess, and sanity-check the transcript is
+   plausible — catches resampling-ratio bugs before they're hidden behind
+   the HTTP layer.
+6. **gear-box server, local, against the real device**:
    `ESP32_HOST=<esp32-ip> run-server.sh`, then
    `curl -X POST localhost:8083/api/speak -d '{"text":"hello"}' -H 'Content-Type: application/json'`.
-5. **Frontend, local**: `run-frontend.sh`, use the real page in a browser.
-6. **Container build, local, still against the real device**:
+7. **Transcript broadcast, local**: with the server from step 6 still
+   running, `curl -N localhost:8083/api/hear-events` in one terminal and
+   `curl -X POST --data-binary @out.pcm -H "Content-Type: application/octet-stream" localhost:8083/hear`
+   in another — confirm the `curl -N` stream prints a `heard` event with
+   the expected transcript/waveform shape, isolating the SSE fan-out path
+   from the browser entirely.
+8. **Frontend, local**: `run-frontend.sh`, use the real page in a
+   browser, trigger `/hear` as in step 7, and confirm the "Listening"
+   panel updates without a page refresh. Also open a **second** tab
+   *after* sending an utterance and confirm it shows nothing until the
+   next one — the explicit zero-backlog check, easy to accidentally break
+   later with a well-intentioned "cache the last event" fix.
+9. **Container build, local, still against the real device**:
    `docker build -t gear-box:dev -f gear-box/dockerfile gear-box/` then
    `docker run -p 8083:80 -e ESP32_HOST=<esp32-ip> gear-box:dev` — catches
-   any Piper-fetch/packaging issue before it reaches the bw server.
-7. Only after 1–6 pass, run `deploy-bw-server.sh` by hand once before
-   trusting CI's webhook trigger.
+   any Piper-fetch/whisper-fetch/packaging issue before it reaches the bw
+   server.
+10. Only after 1–9 pass, run `deploy-bw-server.sh` by hand once before
+    trusting CI's webhook trigger.

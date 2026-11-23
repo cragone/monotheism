@@ -1,29 +1,60 @@
 package handlers
 
 import (
+	"context"
+	"encoding/binary"
 	"io"
+	"log"
 	"net/http"
+	"time"
 
 	"github.com/gin-gonic/gin"
+
+	"github.com/cragone/lorena-teaches-brazilian/gear-box/server/internal/sse"
 )
 
 // MaxHearBytes mirrors piper.MaxOutputBytes -- the same 20s-of-audio
 // sanity cap on the speaker side, applied here to the mic's upload.
 const MaxHearBytes = 882000
 
-// HearHandlers receives raw PCM audio pushed by the mic_listener ESP32
-// and pushes it straight to the sound_machine ESP32 to play back. This is
-// a temporary echo, not understanding: it proves the round trip (mic ->
-// gear-box -> speaker) works, ahead of swapping this handler for
-// something that actually responds to what it heard instead of just
-// replaying it.
-type HearHandlers struct {
-	esp32 Pusher
-	token string
+// transcribeTimeout bounds the background whisper.cpp subprocess call
+// kicked off after each utterance. It's independent of mic_listener's own
+// 15s HTTP timeout (see Hear) -- just a ceiling so a stuck subprocess
+// can't accumulate indefinitely across repeated utterances.
+const transcribeTimeout = 20 * time.Second
+
+// waveformPoints is the fixed size of the downsampled amplitude envelope
+// sent to the frontend for visualization -- small enough to keep the SSE
+// payload light, the browser never needs the full PCM.
+const waveformPoints = 150
+
+// Transcriber is the subset of whisper.Transcriber the handlers need,
+// defined here so tests can supply a mock instead of shelling out to the
+// real whisper-cli binary.
+type Transcriber interface {
+	Transcribe(ctx context.Context, pcm []byte) (string, error)
 }
 
-func NewHearHandlers(pusher Pusher, token string) *HearHandlers {
-	return &HearHandlers{esp32: pusher, token: token}
+// Broadcaster fans out a heard utterance's transcript + waveform to any
+// currently-connected SSE clients. Broadcast must never block on a
+// slow/absent client -- see sse.Hub, the real implementation.
+type Broadcaster interface {
+	Broadcast(event sse.HeardEvent)
+}
+
+// HearHandlers receives raw PCM audio pushed by the mic_listener ESP32,
+// pushes it straight to the sound_machine ESP32 to play back, and -- once
+// that echo has succeeded -- transcribes it in the background and
+// broadcasts the result to any browser tabs listening on /api/hear-events.
+type HearHandlers struct {
+	esp32       Pusher
+	transcriber Transcriber
+	broadcaster Broadcaster
+	token       string
+}
+
+func NewHearHandlers(pusher Pusher, transcriber Transcriber, broadcaster Broadcaster, token string) *HearHandlers {
+	return &HearHandlers{esp32: pusher, transcriber: transcriber, broadcaster: broadcaster, token: token}
 }
 
 func (h *HearHandlers) Hear(c *gin.Context) {
@@ -49,4 +80,73 @@ func (h *HearHandlers) Hear(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"ok": true})
+
+	// Fire-and-forget: mic_listener's HTTP client times out at 15s, and an
+	// 8s clip transcribed on CPU isn't guaranteed to fit comfortably
+	// inside that (especially with Piper synthesis possibly running
+	// concurrently on the same box). The echo above already succeeded, so
+	// a transcription failure here is logged, not surfaced to the mic.
+	go h.transcribeAndBroadcast(pcm)
+}
+
+// transcribeAndBroadcast is a method (not an inline goroutine closure) so
+// tests can call it directly and synchronously instead of racing a `go`
+// statement.
+func (h *HearHandlers) transcribeAndBroadcast(pcm []byte) {
+	ctx, cancel := context.WithTimeout(context.Background(), transcribeTimeout)
+	defer cancel()
+
+	text, err := h.transcriber.Transcribe(ctx, pcm)
+	if err != nil {
+		log.Printf("warn: transcription failed: %v", err)
+		return
+	}
+
+	h.broadcaster.Broadcast(sse.HeardEvent{
+		Transcript: text,
+		Waveform:   downsampleWaveform(pcm, waveformPoints),
+		Timestamp:  time.Now(),
+	})
+}
+
+// downsampleWaveform buckets mono 16-bit signed little-endian PCM into a
+// fixed number of points, taking each bucket's peak absolute amplitude --
+// a lightweight envelope suitable for a simple client-side plot, computed
+// server-side so the browser never needs the full PCM.
+func downsampleWaveform(pcm []byte, points int) []int16 {
+	n := len(pcm) / 2
+	if n == 0 {
+		return []int16{}
+	}
+	if points > n {
+		points = n
+	}
+
+	out := make([]int16, points)
+	bucketSize := n / points
+	for i := range points {
+		start := i * bucketSize
+		end := start + bucketSize
+		if i == points-1 {
+			end = n // last bucket absorbs any remainder
+		}
+
+		var peak int16
+		var peakAbs int32
+		for s := start; s < end; s++ {
+			v := int16(binary.LittleEndian.Uint16(pcm[s*2 : s*2+2]))
+			if vAbs := abs32(int32(v)); vAbs > peakAbs {
+				peak, peakAbs = v, vAbs
+			}
+		}
+		out[i] = peak
+	}
+	return out
+}
+
+func abs32(v int32) int32 {
+	if v < 0 {
+		return -v
+	}
+	return v
 }

@@ -8,19 +8,42 @@ import (
 	"testing"
 
 	"github.com/gin-gonic/gin"
+
+	"github.com/cragone/lorena-teaches-brazilian/gear-box/server/internal/sse"
 )
 
-func setupHear(t *testing.T, token string) (*gin.Engine, *mockPusher) {
+type mockTranscriber struct {
+	text string
+	err  error
+	got  [][]byte
+}
+
+func (m *mockTranscriber) Transcribe(_ context.Context, pcm []byte) (string, error) {
+	m.got = append(m.got, pcm)
+	return m.text, m.err
+}
+
+type mockBroadcaster struct {
+	events []sse.HeardEvent
+}
+
+func (m *mockBroadcaster) Broadcast(event sse.HeardEvent) {
+	m.events = append(m.events, event)
+}
+
+func setupHear(t *testing.T, token string) (*gin.Engine, *mockPusher, *mockTranscriber, *mockBroadcaster, *HearHandlers) {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
 
 	pusher := &mockPusher{}
-	h := NewHearHandlers(pusher, token)
+	transcriber := &mockTranscriber{text: "hello"}
+	broadcaster := &mockBroadcaster{}
+	h := NewHearHandlers(pusher, transcriber, broadcaster, token)
 
 	engine := gin.New()
 	engine.POST("/hear", h.Hear)
 
-	return engine, pusher
+	return engine, pusher, transcriber, broadcaster, h
 }
 
 func doRawRequest(engine *gin.Engine, body []byte, token string) *httptest.ResponseRecorder {
@@ -35,7 +58,7 @@ func doRawRequest(engine *gin.Engine, body []byte, token string) *httptest.Respo
 }
 
 func TestHearPushesToESP32(t *testing.T) {
-	engine, pusher := setupHear(t, "")
+	engine, pusher, _, _, _ := setupHear(t, "")
 
 	rec := doRawRequest(engine, []byte{0x01, 0x02, 0x03}, "")
 	if rec.Code != http.StatusOK {
@@ -47,7 +70,7 @@ func TestHearPushesToESP32(t *testing.T) {
 }
 
 func TestHearRejectsEmptyBody(t *testing.T) {
-	engine, _ := setupHear(t, "")
+	engine, _, _, _, _ := setupHear(t, "")
 
 	rec := doRawRequest(engine, []byte{}, "")
 	if rec.Code != http.StatusBadRequest {
@@ -56,7 +79,7 @@ func TestHearRejectsEmptyBody(t *testing.T) {
 }
 
 func TestHearRejectsOversizedBody(t *testing.T) {
-	engine, _ := setupHear(t, "")
+	engine, _, _, _, _ := setupHear(t, "")
 
 	rec := doRawRequest(engine, make([]byte, MaxHearBytes+1), "")
 	if rec.Code != http.StatusRequestEntityTooLarge {
@@ -65,7 +88,7 @@ func TestHearRejectsOversizedBody(t *testing.T) {
 }
 
 func TestHearRequiresTokenWhenConfigured(t *testing.T) {
-	engine, _ := setupHear(t, "secret")
+	engine, _, _, _, _ := setupHear(t, "secret")
 
 	rec := doRawRequest(engine, []byte{0x01}, "")
 	if rec.Code != http.StatusUnauthorized {
@@ -84,11 +107,47 @@ func TestHearRequiresTokenWhenConfigured(t *testing.T) {
 }
 
 func TestHearReturnsBadGatewayWhenPushFails(t *testing.T) {
-	engine, pusher := setupHear(t, "")
+	engine, pusher, _, _, _ := setupHear(t, "")
 	pusher.err = context.DeadlineExceeded
 
 	rec := doRawRequest(engine, []byte{0x01}, "")
 	if rec.Code != http.StatusBadGateway {
 		t.Fatalf("expected 502 when esp32 push fails, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+// The following tests call transcribeAndBroadcast directly rather than
+// going through Hear's `go` statement, since that method exists
+// specifically so tests can exercise it synchronously (see hear.go).
+
+func TestTranscribeAndBroadcastSendsEvent(t *testing.T) {
+	_, _, transcriber, broadcaster, h := setupHear(t, "")
+	transcriber.text = "turn on the lights"
+
+	pcm := make([]byte, 100)
+	h.transcribeAndBroadcast(pcm)
+
+	if len(transcriber.got) != 1 || !bytes.Equal(transcriber.got[0], pcm) {
+		t.Fatalf("expected Transcribe to be called with the heard pcm, got %+v", transcriber.got)
+	}
+	if len(broadcaster.events) != 1 {
+		t.Fatalf("expected one broadcast event, got %d", len(broadcaster.events))
+	}
+	if broadcaster.events[0].Transcript != "turn on the lights" {
+		t.Fatalf("expected transcript %q, got %q", "turn on the lights", broadcaster.events[0].Transcript)
+	}
+	if len(broadcaster.events[0].Waveform) == 0 {
+		t.Fatal("expected a non-empty waveform envelope")
+	}
+}
+
+func TestTranscribeAndBroadcastSkipsBroadcastOnFailure(t *testing.T) {
+	_, _, transcriber, broadcaster, h := setupHear(t, "")
+	transcriber.err = context.DeadlineExceeded
+
+	h.transcribeAndBroadcast(make([]byte, 100))
+
+	if len(broadcaster.events) != 0 {
+		t.Fatalf("expected no broadcast when transcription fails, got %d", len(broadcaster.events))
 	}
 }
