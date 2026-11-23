@@ -41,7 +41,11 @@ static void connectWiFi() {
   }
 }
 
-static void sendUtterance(const uint8_t *pcm, size_t len) {
+// This house's WiFi is documented elsewhere in this codebase as middling
+// and occasionally flaky (see esp32.Client.Speak's own retry-once, on the
+// other leg of this same round trip) -- one retry on a dropped connection
+// shouldn't fail the whole utterance.
+static int sendUtteranceOnce(const uint8_t *pcm, size_t len) {
   HTTPClient http;
   String url = String("http://") + GEARBOX_HOST + "/hear";
   http.begin(url);
@@ -52,8 +56,19 @@ static void sendUtterance(const uint8_t *pcm, size_t len) {
   }
 
   int status = http.POST((uint8_t *)pcm, len);
-  Serial.printf("sent %u bytes to gear-box, status=%d\n", (unsigned)len, status);
   http.end();
+  return status;
+}
+
+static void sendUtterance(const uint8_t *pcm, size_t len) {
+  int status = sendUtteranceOnce(pcm, len);
+  if (status != HTTP_CODE_OK) {
+    Serial.printf("send failed (status=%d, %s), rssi=%d, retrying once\n", status,
+                  HTTPClient::errorToString(status).c_str(), (int)WiFi.RSSI());
+    delay(1000);
+    status = sendUtteranceOnce(pcm, len);
+  }
+  Serial.printf("sent %u bytes to gear-box, status=%d\n", (unsigned)len, status);
 }
 
 void setup() {
