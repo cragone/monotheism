@@ -12,6 +12,9 @@ type Config struct {
 
 	PiperBinary    string
 	PiperModelPath string
+
+	WhisperBinary    string
+	WhisperModelPath string
 }
 
 func Load() Config {
@@ -28,6 +31,9 @@ func Load() Config {
 
 		PiperBinary:    getenv("PIPER_BINARY", "piper"),
 		PiperModelPath: getenv("PIPER_MODEL_PATH", "/models/voice.onnx"),
+
+		WhisperBinary:    getenv("WHISPER_BINARY", "whisper-cli"),
+		WhisperModelPath: getenv("WHISPER_MODEL_PATH", "/models/whisper-base.en.bin"),
 	}
 }
 

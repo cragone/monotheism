@@ -39,7 +39,7 @@
 // silicon -- if the signal comes through at roughly half (or double) the
 // expected level, try 14 (or 18) instead.
 #ifndef MIC_SAMPLE_SHIFT
-#define MIC_SAMPLE_SHIFT 16
+#define MIC_SAMPLE_SHIFT 14
 #endif
 
 #ifndef MIC_RING_FRAMES
