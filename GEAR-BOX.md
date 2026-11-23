@@ -97,8 +97,9 @@ ESP32S3 Dev Module board entry's defaults are for quad flash/PSRAM modules.
 Pin assignments, sample rate, and the mic-capture internals (FreeRTOS task
 + ring buffer, in `mic.c`/`mic.h`) are documented in `mic_config.h`'s
 comments. Like sound_machine, copy `secrets.example.h` to `secrets.h`
-(gitignored) and fill in WiFi credentials, `GEARBOX_HOST` (gear-box's LAN
-address), and optionally `GEARBOX_API_TOKEN`.
+(gitignored) and fill in WiFi credentials, `GEARBOX_HOST` (gear-box's
+public hostname — see "Reaching gear-box" below for why this isn't a LAN
+address), and `GEARBOX_API_TOKEN` (must match the `MIC_API_TOKEN` Secret).
 
 The firmware runs a crude RMS-threshold voice-activity gate (see
 `MIC_VAD_*` in `mic_config.h`): once a window of audio crosses a loudness
@@ -109,33 +110,62 @@ threshold for `MIC_VAD_SILENCE_MS` it POSTs the whole utterance to
 gear-box and resets. There's no real VAD/noise-floor calibration — the
 threshold is a hand-picked constant, tune it against your actual room.
 
-### Reaching gear-box from the LAN: the NodePort
+### Reaching gear-box: the public hostname, not the LAN NodePort
 
-gear-box's production `Service` is `NodePort`, not `ClusterIP` (see
-`kubernetes/gear-box-production.yaml`) — the bw server's LAN IP on port
-**30080** reaches gear-box directly, with **no basic auth**, same trust
-model `sound_machine`'s own `/speak` already has. This exists because the
-*only* other way in is the `gear-box.charlesragone.com` Traefik
-`IngressRoute`, gated by `vecna-basic-auth` for the whole host with no
-path-scoped carve-out — fine for a browser, but mic_listener (or any
-future LAN device pushing to gear-box) can't do an interactive login.
-**The whole app is reachable on this NodePort**, not just `/hear` — a
-NodePort can't do path-based routing — so anything hit at
-`<bw-server-ip>:30080` (including `/api/speak`) skips the login the public
-hostname requires. `MIC_API_TOKEN` is the only gate actually in front of
-`/hear` itself.
+gear-box's production `Service` is still `NodePort` (see
+`kubernetes/gear-box-production.yaml`), and the bw server's LAN IP on port
+**30080** still reaches gear-box directly with no basic auth, same trust
+model `sound_machine`'s own `/speak` already has — this was the original
+plan, since the *only* other way in was the `gear-box.charlesragone.com`
+Traefik `IngressRoute`, gated by `vecna-basic-auth` for the whole host
+with no path-scoped carve-out, and mic_listener can't do an interactive
+login.
+
+**In practice the NodePort didn't work for mic_listener specifically.**
+Its outbound TCP connects to `<bw-server-ip>:30080` were reliably refused
+(`HTTPC_ERROR_CONNECTION_REFUSED`), even after confirming: ICMP to the
+device was clean (0% loss, normal LAN latency), other LAN clients reached
+the same NodePort fine with real-sized payloads, disabling WiFi modem
+sleep (`WiFi.setSleep(false)`, a real fix worth keeping regardless —
+see mic_listener.ino) didn't change it, and gear-box's own health/logs
+showed nothing wrong server-side. That combination (ICMP fine, this one
+device's outbound TCP to this one port blocked, everything else clean)
+looks like router-level device isolation on whatever WiFi SSID/band the
+mic joined — we don't have router admin access to confirm or fix it
+directly.
+
+So mic_listener now talks to `gear-box.charlesragone.com/hear` instead,
+over HTTPS through the same Cloudflare Tunnel as the browser-facing site,
+via a **path-scoped carve-out** in `kubernetes/gear-box-ingress.yaml`
+(`PathPrefix(`/hear`)`, no `vecna-basic-auth` middleware, higher Traefik
+priority than the host-wide rule) — routing around whatever's isolating
+it on the LAN by going out to the internet and back instead. The LAN
+NodePort is left in place for any other LAN device that doesn't hit
+whatever is blocking this one.
+
+**This makes `MIC_API_TOKEN` load-bearing, not optional.** `/hear` is now
+reachable from the public internet; an unset token would let anyone push
+arbitrary audio to the house's speaker. The token is created as a
+Kubernetes Secret on the host, never committed:
+```
+sudo k3s kubectl -n default create secret generic gear-box-mic-token \
+  --from-literal=token="$(openssl rand -hex 24)"
+```
+`kubernetes/gear-box-production.yaml` references it by name
+(`secretKeyRef`); `gear-box/firmware/mic_listener/secrets.h`'s
+`GEARBOX_API_TOKEN` must match it exactly.
 
 ### Wire contract: `POST /hear`
 
 The mirror image of `/speak`: `mic_listener` is the only thing that ever
-calls this, over the NodePort above. Body is **raw PCM: mono, 16-bit
-signed little-endian, 22050Hz** (mic_listener samples straight at this
-rate so no resampling is needed on either end) — same shape `/speak`
-expects, since gear-box currently just forwards the body through
-unchanged. Capped at `MaxHearBytes` (882000 bytes / 20s, mirroring
-`piper.MaxOutputBytes`); a larger body gets 413. Authenticated via
-`X-Token` if `MIC_API_TOKEN` is set (unset = open, mirroring
-`ESP32_API_TOKEN`'s own default).
+calls this, now over HTTPS to the public hostname (see above) rather than
+the LAN NodePort. Body is **raw PCM: mono, 16-bit signed little-endian,
+22050Hz** (mic_listener samples straight at this rate so no resampling is
+needed on either end) — same shape `/speak` expects, since gear-box
+currently just forwards the body through unchanged. Capped at
+`MaxHearBytes` (882000 bytes / 20s, mirroring `piper.MaxOutputBytes`); a
+larger body gets 413. Authenticated via `X-Token`, checked against
+`MIC_API_TOKEN` (see above).
 
 **The echo is still here, but `Hear` now also transcribes.** `Hear` still
 pushes the uploaded PCM straight to `esp32.Client.Speak`, the same call
@@ -337,7 +367,7 @@ add a Cloudflare Tunnel ingress rule for `gear-box.charlesragone.com` (→
    — confirms the POST handler and playback work, and resolves the
    body-read question flagged above, before any Go code is involved.
 3. **mic_listener alone**: flash it, then
-   `curl -X POST --data-binary @out.pcm -H "Content-Type: application/octet-stream" http://<bw-server-ip>:30080/hear`
+   `curl -X POST --data-binary @out.pcm -H "Content-Type: application/octet-stream" -H "X-Token: <MIC_API_TOKEN>" https://gear-box.charlesragone.com/hear`
    to check `/hear` and the forward-to-speaker path independent of the
    mic's own VAD; then talk near the mic and confirm sound_machine plays
    back what you said (and check the mic's Serial log for `speech

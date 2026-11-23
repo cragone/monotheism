@@ -1,4 +1,5 @@
 #include <WiFi.h>
+#include <WiFiClientSecure.h>
 #include <HTTPClient.h>
 #include <math.h>
 #include "mic.h"
@@ -25,6 +26,13 @@ static unsigned long lastLoudAt = 0;
 
 static void connectWiFi() {
   WiFi.mode(WIFI_STA);
+  // Default modem-sleep power save only wakes the radio at the AP's
+  // beacon/DTIM interval, which measured as 26-230ms of jitter and
+  // occasional dropped connects to gear-box on this specific network --
+  // made worse by the I2S capture task on the other core competing for
+  // scheduling. Trading a bit more power draw for a radio that's always
+  // listening fixes both.
+  WiFi.setSleep(false);
   WiFi.begin(WIFI_SSID, WIFI_PASS);
   Serial.print("Connecting to WiFi");
   unsigned long start = millis();
@@ -41,14 +49,32 @@ static void connectWiFi() {
   }
 }
 
+// GEARBOX_HOST is gear-box's public hostname (reached through the same
+// Cloudflare Tunnel + Traefik path-scoped carve-out as a browser hitting
+// gear-box.charlesragone.com/hear directly, see gear-box-ingress.yaml) --
+// not the LAN NodePort this used to hit. The mic's direct LAN connects to
+// that NodePort were reliably refused for reasons that looked like
+// router-level device isolation (ICMP to it was clean, other LAN clients
+// reached it fine, only this device's outbound TCP connects there failed),
+// so this routes around the LAN entirely instead of fighting that.
+// setInsecure() skips certificate validation -- pragmatic for a
+// constrained device reaching through Cloudflare's edge rather than
+// pinning/rotating a CA cert, at the cost of not verifying who's on the
+// other end of the TLS handshake. MIC_API_TOKEN is what actually gates
+// this now that it's reachable from the public internet, not the TLS
+// session itself.
+//
 // This house's WiFi is documented elsewhere in this codebase as middling
 // and occasionally flaky (see esp32.Client.Speak's own retry-once, on the
 // other leg of this same round trip) -- one retry on a dropped connection
 // shouldn't fail the whole utterance.
 static int sendUtteranceOnce(const uint8_t *pcm, size_t len) {
+  WiFiClientSecure client;
+  client.setInsecure();
+
   HTTPClient http;
-  String url = String("http://") + GEARBOX_HOST + "/hear";
-  http.begin(url);
+  String url = String("https://") + GEARBOX_HOST + "/hear";
+  http.begin(client, url);
   http.setTimeout(15000);
   http.addHeader("Content-Type", "application/octet-stream");
   if (strlen(GEARBOX_API_TOKEN) > 0) {

@@ -16,6 +16,25 @@ spec:
   entryPoints:
     - web
   routes:
+    # Carve-out for mic_listener: it can't do vecna-basic-auth's interactive
+    # login, and the LAN NodePort path (see gear-box-production.yaml) turned
+    # out to be blocked for this one device specifically (confirmed: ICMP to
+    # it is clean and other LAN clients reach the NodePort fine, but the
+    # mic's own outbound TCP connects to it are refused -- looks like
+    # router-level device isolation we don't have access to diagnose
+    # further). Routing over the public hostname instead sidesteps whatever
+    # that is, since it's a LAN-to-LAN path, not LAN-to-internet. Higher
+    # priority than the rule below so it's matched first; MIC_API_TOKEN is
+    # the only thing gating this path now that it's reachable from the
+    # public internet, so it must be set (see hear.go) -- unlike the
+    # NodePort, where it was optional on the assumption only the LAN could
+    # reach it at all.
+    - match: Host(`gear-box.charlesragone.com`) && PathPrefix(`/hear`)
+      kind: Rule
+      priority: 20
+      services:
+        - name: prod-gear-box-service
+          port: 80
     - match: Host(`gear-box.charlesragone.com`)
       kind: Rule
       priority: 10

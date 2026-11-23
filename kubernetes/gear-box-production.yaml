@@ -38,6 +38,18 @@ spec:
               # network namespace is an extra moving part not worth
               # debugging when a fixed IP works unconditionally.
               value: 192.168.1.249
+            - name: MIC_API_TOKEN
+              # No longer optional in practice: /hear is now also reachable
+              # over the public gear-box.charlesragone.com/hear route (see
+              # gear-box-ingress.yaml), so an unset token would let anyone
+              # on the internet push audio to the house speaker. The Secret
+              # itself is created out-of-band on the host (never committed
+              # here), the same pattern as vecna-basic-auth -- see
+              # GEAR-BOX.md for the exact command.
+              valueFrom:
+                secretKeyRef:
+                  name: gear-box-mic-token
+                  key: token
           readinessProbe:
             httpGet:
               path: /api/health
@@ -53,14 +65,19 @@ spec:
             periodSeconds: 20
             failureThreshold: 3
 ---
-# NodePort, not ClusterIP: the mic_listener ESP32 (and any future LAN
-# device) needs to reach gear-box's /hear directly, the same bare-LAN-trust
-# model sound_machine's /speak already uses -- the public hostname is
-# gated by vecna-basic-auth, which a device can't log into, and there's no
-# separate path-scoped bypass for it in the Traefik IngressRoute. This
-# NodePort exposes the whole app (not just /hear) unauthenticated on the
-# LAN at <node-ip>:30080; /hear itself is still gated by MIC_API_TOKEN if
-# set. The IngressRoute in gear-box-ingress.yaml still targets this same
+# NodePort, not ClusterIP: kept for any LAN device that CAN reach it
+# directly, the same bare-LAN-trust model sound_machine's /speak already
+# uses. mic_listener was the original reason for this (the public hostname
+# used to have no path-scoped bypass of vecna-basic-auth), but its outbound
+# TCP connects to this exact NodePort got reliably refused for reasons that
+# looked like router-level device isolation we don't have access to
+# diagnose further -- ICMP to it was clean, and other LAN clients reached
+# this NodePort fine with real-sized payloads. mic_listener now talks to
+# gear-box.charlesragone.com/hear instead (see gear-box-ingress.yaml's
+# path-scoped carve-out), which routes around that isolation entirely.
+# This NodePort exposes the whole app (not just /hear) unauthenticated on
+# the LAN at <node-ip>:30080; /hear itself is still gated by MIC_API_TOKEN.
+# The IngressRoute in gear-box-ingress.yaml still targets this same
 # Service by name/port and is unaffected -- Traefik resolves it via the
 # Service's ClusterIP, which a NodePort Service still has.
 apiVersion: v1
