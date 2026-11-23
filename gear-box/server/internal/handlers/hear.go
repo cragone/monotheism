@@ -74,19 +74,22 @@ func (h *HearHandlers) Hear(c *gin.Context) {
 		return
 	}
 
+	// Fire-and-forget, and deliberately independent of whether the echo
+	// below succeeds: the mic captured real speech either way, and
+	// whether sound_machine happens to be reachable right now shouldn't
+	// decide whether that speech gets transcribed. mic_listener's HTTP
+	// client times out at 15s, and an 8s clip transcribed on CPU isn't
+	// guaranteed to fit comfortably inside that (especially with Piper
+	// synthesis possibly running concurrently on the same box) -- a
+	// transcription failure here is logged, not surfaced to the mic.
+	go h.transcribeAndBroadcast(pcm)
+
 	if err := h.esp32.Speak(c.Request.Context(), pcm); err != nil {
 		c.JSON(http.StatusBadGateway, gin.H{"error": "failed to reach sound machine"})
 		return
 	}
 
 	c.JSON(http.StatusOK, gin.H{"ok": true})
-
-	// Fire-and-forget: mic_listener's HTTP client times out at 15s, and an
-	// 8s clip transcribed on CPU isn't guaranteed to fit comfortably
-	// inside that (especially with Piper synthesis possibly running
-	// concurrently on the same box). The echo above already succeeded, so
-	// a transcription failure here is logged, not surfaced to the mic.
-	go h.transcribeAndBroadcast(pcm)
 }
 
 // transcribeAndBroadcast is a method (not an inline goroutine closure) so

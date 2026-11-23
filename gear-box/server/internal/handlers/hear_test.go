@@ -5,7 +5,9 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/gin-gonic/gin"
 
@@ -23,12 +25,25 @@ func (m *mockTranscriber) Transcribe(_ context.Context, pcm []byte) (string, err
 	return m.text, m.err
 }
 
+// mockBroadcaster is safe for concurrent use: Hear's transcribeAndBroadcast
+// runs in its own goroutine (see hear.go), so tests that exercise it
+// through Hear (rather than calling it directly) read these fields from a
+// different goroutine than the one writing them.
 type mockBroadcaster struct {
+	mu     sync.Mutex
 	events []sse.HeardEvent
 }
 
 func (m *mockBroadcaster) Broadcast(event sse.HeardEvent) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	m.events = append(m.events, event)
+}
+
+func (m *mockBroadcaster) count() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return len(m.events)
 }
 
 func setupHear(t *testing.T, token string) (*gin.Engine, *mockPusher, *mockTranscriber, *mockBroadcaster, *HearHandlers) {
@@ -114,6 +129,34 @@ func TestHearReturnsBadGatewayWhenPushFails(t *testing.T) {
 	if rec.Code != http.StatusBadGateway {
 		t.Fatalf("expected 502 when esp32 push fails, got %d: %s", rec.Code, rec.Body.String())
 	}
+}
+
+// Transcription must not depend on sound_machine being reachable: the mic
+// captured real speech either way, so a speaker outage shouldn't also
+// silence the live transcript feed.
+func TestHearStillTranscribesWhenPushFails(t *testing.T) {
+	engine, pusher, _, broadcaster, _ := setupHear(t, "")
+	pusher.err = context.DeadlineExceeded
+
+	rec := doRawRequest(engine, []byte{0x01, 0x02}, "")
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("expected 502 when esp32 push fails, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	if !waitFor(func() bool { return broadcaster.count() == 1 }) {
+		t.Fatalf("expected a broadcast event despite the failed push, got %d", broadcaster.count())
+	}
+}
+
+func waitFor(condition func() bool) bool {
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		if condition() {
+			return true
+		}
+		time.Sleep(time.Millisecond)
+	}
+	return condition()
 }
 
 // The following tests call transcribeAndBroadcast directly rather than
