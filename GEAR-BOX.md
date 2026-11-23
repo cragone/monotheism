@@ -141,12 +141,15 @@ unchanged. Capped at `MaxHearBytes` (882000 bytes / 20s, mirroring
 pushes the uploaded PCM straight to `esp32.Client.Speak`, the same call
 `/speak` uses, so sound_machine still plays back whatever mic_listener
 recorded — that round trip keeps working standalone, independent of
-whether transcription succeeds. After that echo succeeds and the HTTP
-response has already gone back to mic_listener, `Hear` kicks off
-transcription (see "Speech-to-text: whisper.cpp" below) in a background
-goroutine and broadcasts the result to any browser tabs listening on
+whether transcription succeeds. Transcription itself kicks off in a
+background goroutine as soon as the body is read, *independent of
+whether the echo to sound_machine succeeds* (see "Speech-to-text:
+whisper.cpp" below): the mic captured real speech either way, so a
+speaker outage shouldn't also silence the live transcript feed. It
+broadcasts the result to any browser tabs listening on
 `GET /api/hear-events` (see "Live push: the `/api/hear-events` SSE feed"
-below).
+below). The HTTP response back to mic_listener is still gated on the
+echo alone, same as before transcription existed.
 
 This is deliberately fire-and-forget rather than part of the HTTP
 response: mic_listener's firmware has a 15s HTTP client timeout
