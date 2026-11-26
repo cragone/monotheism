@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Happy Anniversary</title>
+<style>
+:root{--ink:#4a2c2a;--paper:#fbf4e8;--rose:#c8445a;--gold:#b88a2e;--bg:#2b1a1c}
+*{box-sizing:border-box;margin:0}
+html,body{height:100%}
+body{background:radial-gradient(circle at 50% 30%,#4a2a2e,var(--bg));font-family:Georgia,'Times New Roman',serif;color:var(--ink);display:flex;flex-direction:column;align-items:center;justify-content:center;overflow:hidden;user-select:none;-webkit-user-select:none}
+#stage{perspective:2200px;width:min(92vw,calc((100vh - 110px)*.72),560px);aspect-ratio:3/4;position:relative}
+.page{position:absolute;inset:0;transform-origin:left center;transform-style:preserve-3d;transition:transform .9s cubic-bezier(.5,.1,.2,1);cursor:pointer}
+.page.flipped{transform:rotateY(-180deg)}
+.face{position:absolute;inset:0;backface-visibility:hidden;-webkit-backface-visibility:hidden;border-radius:4px 14px 14px 4px;background:var(--paper);box-shadow:0 12px 40px rgba(0,0,0,.45);overflow:hidden;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:6%}
+.face.back{transform:rotateY(180deg);background:linear-gradient(90deg,#efe3cf,var(--paper));border-radius:14px 4px 4px 14px}
+.face::after{content:"";position:absolute;left:0;top:0;bottom:0;width:6%;background:linear-gradient(90deg,rgba(0,0,0,.12),transparent);pointer-events:none}
+.back::after{left:auto;right:0;transform:scaleX(-1)}
+.photo{width:100%;flex:1;min-height:0;background:#fff;padding:3.5%;box-shadow:0 3px 12px rgba(0,0,0,.25);transform:rotate(var(--r,0deg))}
+.photo img{width:100%;height:100%;object-fit:cover;display:block}
+.cap{margin-top:5%;font-style:italic;font-size:clamp(14px,3.4vw,19px);color:var(--ink);text-align:center}
+.cover{background:linear-gradient(135deg,#8c2f45,#c8445a);color:#fff7ea;text-align:center;gap:4%}
+.cover h1{font-size:clamp(32px,9vw,58px);font-weight:normal;font-style:italic;line-height:1.1}
+.cover .heart{font-size:clamp(40px,10vw,70px)}
+.cover small{letter-spacing:.3em;text-transform:uppercase;font-size:clamp(10px,2.6vw,13px);opacity:.85}
+.gift{text-align:center;gap:6%}
+.gift h2{font-size:clamp(20px,5.4vw,32px);font-weight:normal;font-style:italic;color:var(--rose)}
+.gift p{font-size:clamp(17px,4.4vw,26px);line-height:1.45}
+.gift b{color:var(--gold);font-size:1.5em;display:block;margin:.2em 0}
+.end{background:linear-gradient(135deg,#fff3ee,#ffd9de);text-align:center;gap:4%}
+.end h2{font-size:clamp(30px,8vw,52px);font-weight:normal;font-style:italic;color:var(--rose);line-height:1.15}
+.end .heart{font-size:clamp(60px,16vw,110px);color:var(--rose);animation:beat 1.2s infinite}
+@keyframes beat{0%,100%{transform:scale(1)}20%{transform:scale(1.18)}40%{transform:scale(1)}60%{transform:scale(1.12)}}
+#nav{margin-top:22px;display:flex;gap:18px;align-items:center;color:#f3dcc8;font-size:15px}
+#nav button{background:#f3dcc8;color:var(--bg);border:0;border-radius:999px;padding:10px 22px;font:inherit;cursor:pointer}
+#nav button:disabled{opacity:.3;cursor:default}
+.hint{position:absolute;bottom:10px;font-size:12px;color:#c9a99a;opacity:.7}
+</style>
+</head>
+<body>
+<div id="stage"></div>
+<div id="nav"><button id="prev">&larr; Back</button><span id="count"></span><button id="next">Next &rarr;</button></div>
+<script>
+const photos=[
+ ["01.jpg","-1.2deg"],["02.jpg","1deg"],["03.jpg","-1deg"],["04.jpg","1.2deg"],["05.jpg","-.8deg"],
+ ["06.jpg","1deg"],["07.jpg","-1.2deg"],["08.jpg","1deg"],["09.jpg","-1deg"],["10.jpg","1.2deg"]
+];
+const pages=[
+ `<div class="cover face" style="position:absolute;inset:0"><small>Our Story</small><h1>Happy<br>Anniversary</h1><div class="heart">&#10084;&#65039;</div></div>`,
+ ...photos.map(([f,r])=>`<div class="photo" style="--r:${r}"><img src="img/${f}" alt="" draggable="false"></div>`),
+ `<div class="gift">
+   <h2>Your gift this year</h2>
+   <p>My gift this year to you is a<b>$300 shopping spree</b>on Black Friday for whatever you dream of.</p></div>`,
+ `<div class="end"><h2>I love you<br>so much</h2><div class="heart">&#10084;&#65039;</div></div>`
+];
+const stage=document.getElementById('stage'),N=pages.length;let cur=0;
+const els=pages.map((html,i)=>{
+ const p=document.createElement('div');p.className='page';p.style.zIndex=N-i;
+ const front=document.createElement('div');front.className='face';
+ if(i===0){front.innerHTML=html;front.style.padding=0;front.firstChild.style.borderRadius='inherit'}else front.innerHTML=html;
+ if(front.querySelector('.gift'))front.classList.add('gift');
+ if(front.querySelector('.end'))front.classList.add('end');
+ const back=document.createElement('div');back.className='face back';
+ p.append(front,back);stage.append(p);return p;
+});
+function render(){
+ els.forEach((p,i)=>{p.classList.toggle('flipped',i<cur);p.style.zIndex=i<cur?i:N-i});
+ document.getElementById('count').textContent=(cur+1)+' / '+N;
+ prev.disabled=cur===0;next.disabled=cur>=N-1;
+ stage.style.transform='';
+}
+function go(d){cur=Math.max(0,Math.min(N-1,cur+d));render()}
+const prev=document.getElementById('prev'),next=document.getElementById('next');
+prev.onclick=()=>go(-1);next.onclick=()=>go(1);
+stage.addEventListener('click',e=>{const r=stage.getBoundingClientRect();(e.clientX-r.left<r.width*.3&&cur>0)?go(-1):go(1)});
+addEventListener('keydown',e=>{if(e.key==='ArrowRight')go(1);if(e.key==='ArrowLeft')go(-1)});
+let sx=null;addEventListener('touchstart',e=>sx=e.touches[0].clientX,{passive:true});
+addEventListener('touchend',e=>{if(sx===null)return;const d=e.changedTouches[0].clientX-sx;if(Math.abs(d)>40)go(d<0?1:-1);sx=null});
+render();
+</script>
+</body>
+</html>
