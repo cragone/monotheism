@@ -34,24 +34,18 @@ cd spam/server && go run ./cmd/server        # :8080
 cd spam && npm install && npm run dev        # Vite, proxies /api to :8080
 ```
 
-## Deploy (local bw server, like vecna)
+## Deploy (Azure VM k8s cluster)
 
-Runs on the home bw-server's k3s, reached through the Cloudflare Tunnel.
-`spam/scripts/deploy-local.sh` builds the image on the host, imports it into
-k3s, applies `kubernetes/spam-production.yaml` + `kubernetes/spam-ingress.yaml`,
-and rolls out. CI (`production_spam.yml`) triggers it via the deploy webhook.
+Same pipeline as charlesragone.com: `.github/workflows/production_spam.yml`
+SSHes to the Azure VM on push to `main`, builds `spam/dockerfile`, pushes to
+ACR, applies `kubernetes/spam-production.yaml` (PVC + Deployment + Service) and
+`kubernetes/charles_ingress.yaml` (the shared Traefik IngressRoute, which now
+has a `spam.charlesragone.com` route), then rolls out. Uses the existing
+ACR/Azure secrets; no new secrets needed.
 
-One-time host setup (outside this repo):
-
-1. Cloudflare Tunnel `~/.cloudflared/config.yml`: add an ingress rule
-   `hostname: spam.charlesragone.com` → `service: http://localhost:80`, plus a
-   proxied DNS CNAME for `spam` to the tunnel
-   (`cloudflared tunnel route dns <tunnel> spam.charlesragone.com`), then
-   restart the `cloudflared-tunnel` unit.
-2. Webhook `vecna/scripts/hooks.json` on the host: add a second hook
-   `deploy-spam` (copy the `deploy-vecna` entry, same token) with
-   `execute-command` = `/home/charlie/monotheism/spam/scripts/deploy-local.sh`;
-   restart the `vecna-deploy-webhook` unit.
-3. First deploy by hand: `spam/scripts/deploy-bw-server.sh`.
+One-time: in Cloudflare, add a proxied `A` record `spam` → the Azure VM public
+IP (same as the other subdomains). The `charlesragone-com-tls` origin cert must
+cover `spam.charlesragone.com` (true if it is a wildcard, as for the other
+subdomains).
 
 The SQLite PVC is `ReadWriteOnce`, so keep `prod-spam` at one replica.

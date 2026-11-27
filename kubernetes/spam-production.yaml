@@ -1,7 +1,5 @@
-# Applied to the single-node k3s cluster on the bw-server home box (same as
-# vecna, see VECNA.md / SPAM.md) — image is built on the host and imported
-# straight into k3s's containerd by spam/scripts/deploy-local.sh, so no
-# registry/imagePullSecrets are needed.
+# Azure VM k8s cluster (same as charlesragone.com). Image is built on the VM,
+# pushed to ACR and set by .github/workflows/production_spam.yml.
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
@@ -32,10 +30,12 @@ spec:
       labels:
         app: prod-spam
     spec:
+      imagePullSecrets:
+        - name: acr-pull-secret
       containers:
         - name: prod-spam
-          image: placeholder # replaced by deploy-local.sh via kubectl set image
-          imagePullPolicy: IfNotPresent
+          image: placeholder # replaced by pipeline via kubectl set image
+          imagePullPolicy: Always
           ports:
             - containerPort: 80
           env:
