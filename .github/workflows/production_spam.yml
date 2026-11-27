@@ -36,6 +36,8 @@ jobs:
           host: ${{ secrets.AZURE_VM_IP }}
           username: azureuser
           key: ${{ secrets.AZURE_PEM_PRIVATE_KEY }}
+          # first build compiles the pure-Go SQLite driver, which is slow on the VM
+          command_timeout: 30m
           script: |
             set -euo pipefail
 
@@ -56,7 +58,7 @@ jobs:
             echo "${{ secrets.ACR_PASSWORD }}" | sudo docker login "$ACR" -u "${{ secrets.ACR_USERNAME }}" --password-stdin
 
             echo "Building docker image: $FULL_IMAGE"
-            sudo docker build -t "$FULL_IMAGE" -f spam/dockerfile spam
+            sudo DOCKER_BUILDKIT=1 docker build -t "$FULL_IMAGE" -f spam/dockerfile spam
 
             echo "Pushing docker image: $FULL_IMAGE"
             sudo docker push "$FULL_IMAGE"

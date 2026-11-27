@@ -1,16 +1,17 @@
 FROM node:20-alpine AS frontend-build
 WORKDIR /app
 COPY package*.json ./
-RUN npm install
+RUN --mount=type=cache,target=/root/.npm npm install
 COPY . .
 RUN npm run build
 
 FROM golang:1.26-alpine AS server-build
 WORKDIR /app
 COPY server/go.mod server/go.sum ./
-RUN go mod download
+RUN --mount=type=cache,target=/go/pkg/mod go mod download
 COPY server/ .
-RUN CGO_ENABLED=0 GOOS=linux go build -o /spam-server ./cmd/server
+RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build \
+    CGO_ENABLED=0 GOOS=linux go build -o /spam-server ./cmd/server
 
 FROM alpine:3.20
 COPY --from=server-build /spam-server /spam-server
