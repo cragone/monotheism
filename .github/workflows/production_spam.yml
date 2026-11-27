@@ -1,0 +1,29 @@
+name: Production Deployment of spam.charlesragone.com
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "spam/**"
+      - "kubernetes/spam-production.yaml"
+      - "kubernetes/spam-ingress.yaml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    name: Trigger deploy webhook
+    runs-on: ubuntu-latest
+    environment: Production
+
+    steps:
+      # Same as vecna: the bw-server is a home box behind a Cloudflare Tunnel,
+      # so CI only hits a token-gated webhook that runs spam/scripts/deploy-local.sh.
+      # The webhook lives at the vecna deploy hostname; "deploy-spam" is a second hook id.
+      - name: Trigger spam deploy webhook
+        run: |
+          curl -sS --fail -X POST \
+            -H "X-Deploy-Token: ${{ secrets.VECNA_DEPLOY_TOKEN }}" \
+            https://deploy-vecna.charlesragone.com/hooks/deploy-spam

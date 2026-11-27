@@ -1,0 +1,32 @@
+# Route for spam.charlesragone.com on the bw-server k3s Traefik. Reached via
+# the host's Cloudflare Tunnel (TLS terminates at Cloudflare, plain HTTP on
+# loopback), same as vecna — hence entryPoint "web". No BasicAuth: the app is
+# public and authenticates each request with its own signed-key scheme.
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: spam-ratelimit
+  namespace: default
+spec:
+  rateLimit:
+    average: 30
+    period: 1s
+    burst: 60
+---
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: spam-web
+  namespace: default
+spec:
+  entryPoints:
+    - web
+  routes:
+    - match: Host(`spam.charlesragone.com`)
+      kind: Rule
+      priority: 10
+      middlewares:
+        - name: spam-ratelimit
+      services:
+        - name: prod-spam-service
+          port: 80
