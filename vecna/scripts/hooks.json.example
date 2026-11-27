@@ -15,5 +15,22 @@
         }
       }
     }
+  },
+  {
+    "id": "deploy-spam",
+    "execute-command": "/home/charlie/monotheism/spam/scripts/deploy-local.sh",
+    "command-working-directory": "/home/charlie/monotheism",
+    "response-message": "Deploying spam...",
+    "include-command-output-in-response": true,
+    "trigger-rule": {
+      "match": {
+        "type": "value",
+        "value": "REPLACE_WITH_A_LONG_RANDOM_TOKEN",
+        "parameter": {
+          "source": "header",
+          "name": "X-Deploy-Token"
+        }
+      }
+    }
   }
 ]

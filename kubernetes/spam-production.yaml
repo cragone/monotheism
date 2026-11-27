@@ -1,0 +1,78 @@
+# Applied to the single-node k3s cluster on the bw-server home box (same as
+# vecna, see VECNA.md / SPAM.md) — image is built on the host and imported
+# straight into k3s's containerd by spam/scripts/deploy-local.sh, so no
+# registry/imagePullSecrets are needed.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: prod-spam-data
+  namespace: default
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 2Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: prod-spam
+  namespace: default
+spec:
+  # SQLite lives on a single ReadWriteOnce volume, so this must stay at 1 replica.
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: prod-spam
+  template:
+    metadata:
+      labels:
+        app: prod-spam
+    spec:
+      containers:
+        - name: prod-spam
+          image: placeholder # replaced by deploy-local.sh via kubectl set image
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 80
+          env:
+            - name: PORT
+              value: "80"
+            - name: DATA_DIR
+              value: /data
+          volumeMounts:
+            - name: data
+              mountPath: /data
+          readinessProbe:
+            httpGet:
+              path: /api/health
+              port: 80
+            initialDelaySeconds: 3
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /api/health
+              port: 80
+            initialDelaySeconds: 15
+            periodSeconds: 20
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: prod-spam-data
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: prod-spam-service
+  namespace: default
+spec:
+  selector:
+    app: prod-spam
+  ports:
+    - protocol: TCP
+      port: 80
+      targetPort: 80
+  type: ClusterIP

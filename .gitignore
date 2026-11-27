@@ -35,3 +35,8 @@ gear-box/scripts/hooks.json
 # Editor/IDE
 # .idea/
 # .vscode/
+
+# spam
+spam/node_modules
+spam/dist
+spam/server/data
